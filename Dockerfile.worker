@@ -1,0 +1,61 @@
+# Worker Dockerfile
+# Separate container for BullMQ job processing with dbt
+# =====================================================
+# Der Worker führt dbt Jobs aus (deploy, run, test)
+# =====================================================
+
+FROM node:22-alpine
+
+WORKDIR /app
+
+# =====================================================
+# Install dbt dependencies
+# =====================================================
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    git \
+    unixodbc \
+    unixodbc-dev \
+    freetds-dev \
+    build-base \
+    python3-dev \
+    bash
+
+# Install Microsoft ODBC Driver 18
+RUN apk add --no-cache curl gnupg && \
+    curl -O https://download.microsoft.com/download/b/9/f/b9f3cce4-3925-46d4-9f46-da08869c6486/msodbcsql18_18.3.3.1-1_amd64.apk && \
+    apk add --allow-untrusted msodbcsql18_18.3.3.1-1_amd64.apk || true && \
+    rm msodbcsql18_18.3.3.1-1_amd64.apk
+
+# Install dbt-core and dbt-sqlserver
+RUN pip3 install --break-system-packages \
+    dbt-core==1.9.0 \
+    dbt-sqlserver==1.9.0
+
+# Install dependencies
+COPY package*.json ./
+RUN npm ci --legacy-peer-deps
+
+# Copy source code
+COPY . .
+
+# Copy dbt project
+COPY ./dbt ./dbt
+
+# Install tsx for running TypeScript directly
+RUN npm install -g tsx
+
+# Environment variables
+ENV NODE_ENV=production
+ENV WORKER_CONCURRENCY=2
+
+# dbt environment variables (override at runtime)
+ENV DBT_PROFILES_DIR=/app/dbt
+ENV MDS_DB_SERVER=""
+ENV MDS_DB_DATABASE=""
+ENV MDS_DB_USER=""
+ENV MDS_DB_PASSWORD=""
+
+# Run the worker
+CMD ["tsx", "src/lib/queue/worker.ts"]

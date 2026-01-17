@@ -1,0 +1,49 @@
+# =====================================================
+# MDS dbt Profiles
+# =====================================================
+# Diese Konfiguration wird zur Laufzeit durch 
+# Environment-Variablen überschrieben.
+# =====================================================
+
+mds:
+  target: dev
+  outputs:
+    # Lokale Entwicklung mit Azure CLI Auth
+    dev:
+      type: sqlserver
+      driver: 'ODBC Driver 18 for SQL Server'
+      server: "{{ env_var('MDS_DB_SERVER', 'sql-datavault-weu-001.database.windows.net') }}"
+      database: "{{ env_var('MDS_DB_DATABASE', 'Vault') }}"
+      schema: mds_meta
+      authentication: cli
+      encrypt: true
+      trust_cert: false
+      threads: 4
+
+    # Lokale Entwicklung mit SQL Auth (falls CLI nicht funktioniert)
+    local:
+      type: sqlserver
+      driver: 'ODBC Driver 18 for SQL Server'
+      server: "sql-datavault-weu-001.database.windows.net"
+      database: "Vault"
+      schema: mds_meta
+      authentication: sql
+      user: "sqladmin"
+      password: "Felldl1304#1988#"
+      encrypt: true
+      trust_cert: false
+      threads: 4
+
+    # Produktion Target (verwendet von Docker mit SQL Auth)
+    prod:
+      type: sqlserver
+      driver: 'ODBC Driver 18 for SQL Server'
+      server: "{{ env_var('MDS_DB_SERVER') }}"
+      database: "{{ env_var('MDS_DB_DATABASE') }}"
+      schema: mds_meta
+      authentication: sql
+      user: "{{ env_var('MDS_DB_USER') }}"
+      password: "{{ env_var('MDS_DB_PASSWORD') }}"
+      encrypt: true
+      trust_cert: false
+      threads: 4

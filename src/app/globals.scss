@@ -1,0 +1,764 @@
+// Blueprint.js Core Styles
+@import "@blueprintjs/core/lib/css/blueprint.css";
+@import "@blueprintjs/icons/lib/css/blueprint-icons.css";
+@import "@blueprintjs/table/lib/css/table.css";
+@import "@blueprintjs/select/lib/css/blueprint-select.css";
+@import "@blueprintjs/datetime/lib/css/blueprint-datetime.css";
+
+// Fix Blueprint Popover positioning in Next.js
+// The popover gets wrong coordinates due to CSS transforms on parent elements
+.model-card-popover {
+  // Force the popover to use the viewport as reference
+  &.bp5-popover {
+    // The transform will be set by JS, we just ensure it's not overridden
+  }
+}
+
+// CSS Variables for theming
+:root {
+  --sidebar-width: 220px;
+  --header-height: 44px;
+  --content-padding: 16px;
+  --font-size-base: 12px;
+  --font-size-small: 11px;
+  --font-size-title: 14px;
+}
+
+// Reset
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+  font-size: var(--font-size-base);
+}
+
+// Utility classes
+.text-muted {
+  color: #5c7080;
+}
+
+.card-footer {
+  border-top: 1px solid #e1e8ed;
+}
+
+// Portal Dark Mode - Dialogs werden außerhalb des .bp5-dark Containers gerendert
+// Diese Styles gelten immer wenn body.bp5-dark gesetzt ist
+body.bp5-dark {
+  // Portal für bp5 und bp6 (Blueprint 6 nutzt gemischte Prefixe!)
+  .bp5-portal,
+  .bp6-portal,
+  [class*="bp5-overlay"],
+  [class*="bp6-overlay"] {
+    .bp5-overlay-backdrop,
+    .bp6-overlay-backdrop {
+      background: rgba(16, 22, 26, 0.7);
+    }
+    
+    // Dialog - sowohl bp5 als auch bp6 Klassen
+    .bp5-dialog,
+    .bp6-dialog {
+      background: #30404d !important;
+      color: #f5f8fa !important;
+      
+      .bp5-dialog-header,
+      .bp6-dialog-header {
+        background: #252a31 !important;
+        border-bottom: 1px solid #404854 !important;
+        
+        .bp5-heading,
+        .bp6-heading,
+        h1, h2, h3, h4, h5 {
+          color: #f5f8fa !important;
+        }
+        
+        .bp5-icon,
+        .bp6-icon {
+          color: #a7b6c2 !important;
+        }
+        
+        .bp5-button,
+        .bp6-button {
+          color: #a7b6c2 !important;
+          
+          &:hover {
+            background: rgba(255, 255, 255, 0.1) !important;
+          }
+        }
+      }
+      
+      .bp5-dialog-body,
+      .bp6-dialog-body {
+        color: #f5f8fa !important;
+        
+        .bp5-form-group,
+        .bp6-form-group {
+          .bp5-label,
+          .bp6-label {
+            color: #f5f8fa !important;
+          }
+        }
+        
+        .bp5-form-helper-text,
+        .bp6-form-helper-text {
+          color: #a7b6c2 !important;
+        }
+      }
+      
+      .bp5-dialog-footer,
+      .bp6-dialog-footer {
+        background: #252a31 !important;
+        border-top: 1px solid #404854 !important;
+      }
+      
+      // Input fields
+      .bp5-input,
+      .bp6-input,
+      .bp5-input-group input,
+      .bp6-input-group input,
+      .bp5-text-area,
+      .bp6-text-area,
+      input,
+      textarea {
+        background: #1c2127 !important;
+        color: #f5f8fa !important;
+        border-color: #404854 !important;
+        
+        &::placeholder {
+          color: #5c7080 !important;
+        }
+        
+        &:focus {
+          border-color: #137cbd !important;
+          box-shadow: 0 0 0 1px #137cbd !important;
+        }
+      }
+      
+      // Select
+      .bp5-html-select select,
+      .bp6-html-select select {
+        background: #1c2127 !important;
+        color: #f5f8fa !important;
+        border-color: #404854 !important;
+      }
+    }
+  }
+}
+
+// Dark Mode Text Fix - Comprehensive
+.bp5-dark {
+  color: #f5f8fa;
+  
+  // Global text inheritance
+  h1, h2, h3, h4, h5, h6, p, span, div, td, th, label {
+    color: inherit;
+  }
+  
+  .bp5-heading {
+    color: #f5f8fa;
+  }
+  
+  // Utility classes in dark mode
+  .text-muted {
+    color: #a7b6c2 !important;
+  }
+  
+  .card-footer {
+    border-color: #404854;
+  }
+  
+  // Cards - force dark background
+  .bp5-card {
+    background: #30404d !important;
+    color: #f5f8fa !important;
+    border-color: #404854 !important;
+    
+    * {
+      color: inherit;
+    }
+  }
+  
+  // Dialog/Modal - Dark Mode
+  .bp5-dialog {
+    background: #30404d !important;
+    color: #f5f8fa !important;
+    
+    .bp5-dialog-header {
+      background: #252a31 !important;
+      
+      .bp5-heading {
+        color: #f5f8fa !important;
+      }
+    }
+    
+    .bp5-dialog-body {
+      color: #f5f8fa !important;
+      
+      .bp5-form-group {
+        .bp5-label {
+          color: #f5f8fa !important;
+        }
+      }
+    }
+    
+    .bp5-dialog-footer {
+      background: #252a31 !important;
+    }
+    
+    // Input fields in dialog
+    .bp5-input, .bp5-text-area {
+      background: #1c2127 !important;
+      color: #f5f8fa !important;
+      border-color: #404854 !important;
+      
+      &::placeholder {
+        color: #8a9ba8 !important;
+      }
+    }
+  }
+  
+  // Tables - force colors
+  .bp5-html-table {
+    color: #f5f8fa !important;
+    background: transparent !important;
+    
+    th {
+      color: #a7b6c2 !important;
+      background: #252a31 !important;
+    }
+    
+    td {
+      color: #f5f8fa !important;
+      background: transparent !important;
+    }
+    
+    // Striped rows
+    &.bp5-html-table-striped tbody tr:nth-child(odd) td {
+      background: rgba(255, 255, 255, 0.03) !important;
+    }
+    
+    // Interactive hover
+    &.bp5-interactive tbody tr:hover td {
+      background: rgba(255, 255, 255, 0.08) !important;
+    }
+  }
+  
+  // Tags - verbesserte Lesbarkeit
+  .bp5-tag {
+    &.bp5-minimal {
+      background: rgba(255, 255, 255, 0.15) !important;
+      color: inherit !important;
+    }
+    
+    // Intent colors mit besserem Kontrast
+    &.bp5-intent-success {
+      background: rgba(15, 153, 96, 0.3) !important;
+      color: #3dcc91 !important;
+    }
+    
+    &.bp5-intent-warning {
+      background: rgba(217, 130, 43, 0.3) !important;
+      color: #ffb366 !important;
+    }
+    
+    &.bp5-intent-primary {
+      background: rgba(19, 124, 189, 0.3) !important;
+      color: #48aff0 !important;
+    }
+    
+    &.bp5-intent-danger {
+      background: rgba(219, 55, 55, 0.3) !important;
+      color: #ff7373 !important;
+    }
+  }
+  
+  // Model cards specific
+  .model-card {
+    background: #30404d !important;
+    border-color: #404854 !important;
+    
+    p {
+      color: #a7b6c2 !important;
+    }
+  }
+  
+  // Dashboard tiles
+  .dashboard-tile {
+    background: #30404d !important;
+    border-color: #404854 !important;
+    
+    .tile-label {
+      color: #a7b6c2 !important;
+    }
+  }
+  
+  // KPI cards
+  .kpi-card {
+    background: #30404d !important;
+    border-color: #404854 !important;
+    
+    .kpi-label {
+      color: #a7b6c2 !important;
+    }
+  }
+  
+  // Data table container
+  .data-table-container {
+    background: #30404d !important;
+    border-color: #404854 !important;
+    
+    th {
+      color: #a7b6c2 !important;
+      background: #252a31 !important;
+    }
+  }
+  
+  // Icons - heller im Dark Mode
+  .bp5-icon {
+    color: #a7b6c2;
+    
+    &.bp5-intent-success {
+      color: #3dcc91 !important;
+    }
+    
+    &.bp5-intent-warning {
+      color: #ffb366 !important;
+    }
+    
+    &.bp5-intent-primary {
+      color: #48aff0 !important;
+    }
+  }
+  
+  // Borders global
+  .model-card,
+  .kpi-card,
+  .data-table-container {
+    border-color: #404854 !important;
+  }
+}
+
+// App Layout
+.app-container {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+// Sidebar
+.sidebar {
+  width: var(--sidebar-width);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-color, #e1e8ed);
+  background: var(--sidebar-bg, #f5f8fa);
+
+  .bp5-dark & {
+    background: #1c2127;
+    border-color: #404854;
+  }
+}
+
+.sidebar-header {
+  padding: 12px 14px;
+  height: var(--header-height);
+  border-bottom: 1px solid var(--border-color, #e1e8ed);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  .bp5-dark & {
+    border-color: #404854;
+  }
+
+  .logo {
+    width: 26px;
+    height: 26px;
+    background: linear-gradient(135deg, #137cbd, #0d8050);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: bold;
+    font-size: 12px;
+  }
+
+  .title {
+    font-size: 13px;
+    font-weight: 600;
+  }
+}
+
+.sidebar-nav {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.nav-section {
+  margin-bottom: 12px;
+
+  .nav-section-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: #8a9ba8;
+    padding: 6px 10px 3px;
+    letter-spacing: 0.5px;
+  }
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  color: inherit;
+  text-decoration: none;
+
+  &:hover {
+    background: rgba(19, 124, 189, 0.1);
+  }
+
+  &.active {
+    background: rgba(19, 124, 189, 0.15);
+    color: #137cbd;
+
+    .bp5-dark & {
+      background: rgba(19, 124, 189, 0.3);
+      color: #48aff0;
+    }
+  }
+
+  .nav-icon {
+    width: 16px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .nav-label {
+    flex: 1;
+    font-size: var(--font-size-base);
+  }
+
+  .nav-badge {
+    font-size: var(--font-size-small);
+  }
+}
+
+.sidebar-footer {
+  padding: 10px;
+  border-top: 1px solid var(--border-color, #e1e8ed);
+
+  .bp5-dark & {
+    border-color: #404854;
+  }
+}
+
+// Main Content
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+// Header
+.header {
+  height: var(--header-height);
+  min-height: var(--header-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-color, #e1e8ed);
+  background: var(--header-bg, #ffffff);
+
+  .bp5-dark & {
+    background: #1c2127;
+    border-color: #404854;
+  }
+}
+
+.header-left {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+
+// User menu popover positioning fix
+.user-menu-popover {
+  margin-top: 4px;
+}
+
+.breadcrumb {
+  font-size: var(--font-size-small);
+  color: #5c7080;
+  line-height: 1.2;
+
+  .bp5-dark & {
+    color: #a7b6c2;
+  }
+}
+
+.header-title {
+  font-size: var(--font-size-title);
+  font-weight: 600;
+  margin: 0;
+  line-height: 1.2;
+}
+
+// Page Content
+.page-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--content-padding);
+  background: var(--content-bg, #f5f8fa);
+
+  .bp5-dark & {
+    background: #252a31;
+  }
+}
+
+// Dashboard Tiles (Windows Server Manager Style)
+.dashboard-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.dashboard-tile {
+  background: white;
+  border-radius: 3px;
+  padding: 14px;
+  border: 1px solid #e1e8ed;
+  cursor: default;
+  transition: box-shadow 0.15s ease;
+
+  .bp5-dark & {
+    background: #30404d;
+    border-color: #404854;
+  }
+
+  &:hover {
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  .tile-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .tile-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(19, 124, 189, 0.1);
+    color: #137cbd;
+
+    .bp5-dark & {
+      background: rgba(19, 124, 189, 0.2);
+      color: #48aff0;
+    }
+  }
+
+  .tile-title {
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .tile-count {
+    font-size: 22px;
+    font-weight: 300;
+    margin-bottom: 2px;
+  }
+
+  .tile-label {
+    font-size: var(--font-size-small);
+    color: #8a9ba8;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .tile-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 10px;
+    font-size: var(--font-size-base);
+  }
+}
+
+// Data Table Container
+.data-table-container {
+  background: white;
+  border-radius: 4px;
+  border: 1px solid #e1e8ed;
+  overflow: hidden;
+
+  .bp5-dark & {
+    background: #30404d;
+    border-color: #404854;
+  }
+  
+  // Vertikale Zentrierung in Tabellen
+  table {
+    font-size: var(--font-size-base);
+  }
+  
+  th, td {
+    vertical-align: middle !important;
+    padding: 10px 12px !important;
+  }
+  
+  th {
+    font-size: var(--font-size-small) !important;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    background: white;
+    
+    .bp5-dark & {
+      background: #394b59;
+    }
+  }
+}
+
+// Model Cards (nicht klickbar, dezenter hover)
+.model-card {
+  cursor: default !important;
+  transition: box-shadow 0.15s ease !important;
+  
+  &:hover {
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1) !important;
+  }
+}
+
+// KPI Grid
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+// KPI Cards (einheitliches Design)
+.kpi-card {
+  background: white;
+  border: 1px solid #e1e8ed;
+  border-radius: 4px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  
+  .bp5-dark & {
+    background: #30404d;
+    border-color: #404854;
+  }
+  
+  .kpi-label {
+    font-size: var(--font-size-small);
+    color: #5c7080;
+    text-transform: uppercase;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    
+    .bp5-dark & {
+      color: #a7b6c2;
+    }
+  }
+  
+  .kpi-value {
+    font-size: 20px;
+    font-weight: 600;
+    color: #182026;
+    
+    .bp5-dark & {
+      color: #f5f8fa;
+    }
+  }
+}
+
+// Section Header (einheitlich)
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  gap: 16px;
+
+  h2 {
+    font-size: var(--font-size-title);
+    font-weight: 600;
+    margin: 0;
+    white-space: nowrap;
+  }
+  
+  .section-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+}
+
+// Dialog Padding Fix
+.bp5-dialog-body {
+  padding: 20px !important;
+}
+
+// Blueprint Size Override - Small als Default
+.bp5-button:not(.bp5-large) {
+  font-size: var(--font-size-base);
+}
+
+.bp5-input, .bp5-input-group input {
+  font-size: var(--font-size-base);
+}
+
+.bp5-html-select select {
+  font-size: var(--font-size-base);
+}
+
+.bp5-tag {
+  font-size: var(--font-size-small);
+}
+
+// Toast container position
+.bp5-toast-container {
+  z-index: 100;
+}
+
+// Page specific layouts
+// Consistent Model/Card Grid
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}

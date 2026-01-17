@@ -1,0 +1,72 @@
+# =====================================================
+# MDS (Master Data Services) - Eigenständiges dbt Projekt
+# =====================================================
+# Dieses Projekt ist UNABHÄNGIG vom Data Vault Projekt
+# und wird als embedded dbt innerhalb des MDS Service
+# Docker Containers ausgeführt.
+# =====================================================
+
+name: 'mds'
+version: '1.0.0'
+config-version: 2
+
+profile: 'mds'
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# =====================================================
+# SCHEMA NAMING CONVENTION
+# =====================================================
+# [mds_meta]   - Metadata Tabellen (model, entity, attribute, view)
+# [mds_stage]  - Staging Tabelle (staged_record mit JSON)
+# [mds_load]   - Strukturierte Load Tabellen (load_<entity>)
+# [mds_master] - SCD2 Master Tabellen (<entity>)
+# [mds_view]   - Output Views (v_<entity>, v_<entity>_history)
+
+vars:
+  # Default Werte für SCD2
+  scd2_valid_to_default: '9999-12-31'
+  
+  # Metadata
+  mds_created_by: 'dbt'
+
+models:
+  mds:
+    # Metadata Schema Setup (Initial Bootstrap)
+    mds_meta:
+      +schema: mds_meta
+      +materialized: table
+      +as_columnstore: false
+      +tags: ['bootstrap', 'meta']
+    
+    # Load Schema (dynamisch generierte Tabellen)
+    mds_load:
+      +schema: mds_load
+      +materialized: table
+      +as_columnstore: false
+      +tags: ['load']
+    
+    # Master Schema (SCD2 historisierte Tabellen)
+    mds_master:
+      +schema: mds_master
+      +materialized: incremental
+      +incremental_strategy: append
+      +as_columnstore: false
+      +tags: ['master', 'scd2']
+    
+    # View Schema (Output Views für Konsumenten)
+    mds_view:
+      +schema: mds_view
+      +materialized: view
+      +tags: ['view', 'output']
+
+seeds:
+  mds:
+    +schema: mds_meta

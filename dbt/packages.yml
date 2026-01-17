@@ -1,0 +1,5 @@
+# MDS dbt Packages
+packages: []
+
+# Hinweis: Keine externen Packages benötigt
+# Alle Macros sind custom für MDS implementiert

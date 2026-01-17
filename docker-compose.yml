@@ -1,0 +1,81 @@
+# Master Data Services - Docker Compose
+# 
+# Services:
+# - mds-app: Next.js frontend (Port 3000) mit embedded dbt
+# - mds-worker: BullMQ job worker mit dbt für async Jobs
+#
+# Redis: Uses Upstash Redis (cloud) via UPSTASH_REDIS_URL
+#
+# Usage:
+#   docker-compose up -d          # Start all services
+#   docker-compose logs -f        # View logs
+#   docker-compose down           # Stop all services
+#
+# Bei Start führt mds-app automatisch "dbt run --select tag:bootstrap"
+# aus um alle MDS Schemas und Tabellen zu erstellen.
+
+services:
+  # Next.js Application with embedded dbt
+  mds-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mds-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # Auth
+      - AUTH_SECRET=${AUTH_SECRET}
+      - AUTH_URL=http://localhost:3000
+      # Azure AD (optional for Microsoft login)
+      - AUTH_MICROSOFT_ENTRA_ID_ID=${AUTH_MICROSOFT_ENTRA_ID_ID:-}
+      - AUTH_MICROSOFT_ENTRA_ID_SECRET=${AUTH_MICROSOFT_ENTRA_ID_SECRET:-}
+      - AUTH_MICROSOFT_ENTRA_ID_ISSUER=${AUTH_MICROSOFT_ENTRA_ID_ISSUER:-}
+      # Database (für Next.js API)
+      - DB_SERVER=${DB_SERVER:-sql-datavault-weu-001.database.windows.net}
+      - DB_NAME=${DB_NAME:-Vault}
+      - DB_MOCK=${DB_MOCK:-false}
+      # dbt Database Connection (für Container-Start Bootstrap)
+      - MDS_DB_SERVER=${DB_SERVER:-sql-datavault-weu-001.database.windows.net}
+      - MDS_DB_DATABASE=${DB_NAME:-Vault}
+      - MDS_DB_USER=${DB_USER:-}
+      - MDS_DB_PASSWORD=${DB_PASSWORD:-}
+      # Redis - Upstash (cloud)
+      - UPSTASH_REDIS_URL=${UPSTASH_REDIS_URL}
+      - QUEUE_MOCK=${QUEUE_MOCK:-false}
+      # Dev mode (disable in production)
+      - NEXT_PUBLIC_DEV_MODE=${NEXT_PUBLIC_DEV_MODE:-false}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # BullMQ Worker with dbt for async jobs
+  mds-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: mds-worker
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      # Database (für dbt)
+      - DB_SERVER=${DB_SERVER:-sql-datavault-weu-001.database.windows.net}
+      - DB_NAME=${DB_NAME:-Vault}
+      - DB_MOCK=${DB_MOCK:-false}
+      # dbt Database Connection
+      - MDS_DB_SERVER=${DB_SERVER:-sql-datavault-weu-001.database.windows.net}
+      - MDS_DB_DATABASE=${DB_NAME:-Vault}
+      - MDS_DB_USER=${DB_USER:-}
+      - MDS_DB_PASSWORD=${DB_PASSWORD:-}
+      - MDS_DBT_TARGET=${DBT_TARGET:-prod}
+      - DBT_PROFILES_DIR=/app/dbt
+      # Redis - Upstash (cloud)
+      - UPSTASH_REDIS_URL=${UPSTASH_REDIS_URL}
+      # Worker settings
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-2}
+
+# No volumes needed - using Upstash Redis (cloud)

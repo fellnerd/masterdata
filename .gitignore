@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Production
+build/
+dist/
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local env files
+.env*.local
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs
+logs/
+*.log
+
+# Coverage
+coverage/
+
+# Misc
+.DS_Store
+*.pem
+
+# dbt
+dbt/target/
+dbt/logs/
+dbt/.user.yml
+dbt/dbt_packages/
+**/__pycache__/
+*.pyc
