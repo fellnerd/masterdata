@@ -37,10 +37,17 @@ RUN apk add --no-cache \
     python3-dev
 
 # Install Microsoft ODBC Driver 18 (profiles.yml targets reference it by name;
-# unixodbc alone is only the driver manager, not this driver)
-RUN curl -O https://download.microsoft.com/download/b/9/f/b9f3cce4-3925-46d4-9f46-da08869c6486/msodbcsql18_18.3.3.1-1_amd64.apk && \
-    apk add --allow-untrusted msodbcsql18_18.3.3.1-1_amd64.apk || true && \
-    rm -f msodbcsql18_18.3.3.1-1_amd64.apk
+# unixodbc alone is only the driver manager, not this driver). Architecture is
+# detected at build time since Microsoft ships separate amd64/arm64 .apk files
+# (the same x86-64 binary silently fails to dlopen on an arm64 host).
+RUN case "$(uname -m)" in \
+      x86_64) MSODBC_ARCH=amd64 ;; \
+      aarch64) MSODBC_ARCH=arm64 ;; \
+      *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac && \
+    curl -O https://download.microsoft.com/download/0b3d5518-b4a7-4a2b-afc7-7ee9e967f93c/msodbcsql18_18.6.2.1-1_${MSODBC_ARCH}.apk && \
+    apk add --allow-untrusted msodbcsql18_18.6.2.1-1_${MSODBC_ARCH}.apk && \
+    rm -f msodbcsql18_18.6.2.1-1_${MSODBC_ARCH}.apk
 
 # Install dbt-core and dbt-sqlserver
 RUN pip3 install --break-system-packages \
