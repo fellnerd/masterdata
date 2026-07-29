@@ -79,14 +79,21 @@ export function Header({ title, breadcrumb, actions }: HeaderProps) {
         </Button>
 
         <div ref={menuRef} style={{ position: 'relative' }}>
-          <Button 
-            minimal 
-            small 
-            icon="user" 
+          <Button
+            minimal
+            small
+            icon={session?.user?.image ? undefined : 'user'}
             rightIcon="caret-down"
             onClick={() => setMenuOpen(!menuOpen)}
             active={menuOpen}
           >
+            {session?.user?.image && (
+              <img
+                src={session.user.image}
+                alt=""
+                style={{ width: 20, height: 20, borderRadius: '50%', marginRight: 6, verticalAlign: 'middle' }}
+              />
+            )}
             {userName}
           </Button>
           {menuOpen && (

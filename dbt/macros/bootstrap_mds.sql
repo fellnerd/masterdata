@@ -321,6 +321,75 @@ IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_job_type_status')
 CREATE INDEX IX_job_type_status ON mds_meta.job([type], status);
 {% endset %}
 
+{% set user_sql %}
+-- mds_meta.user Tabelle (Identity - eine Zeile pro Login-Konto)
+IF NOT EXISTS (SELECT * FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'mds_meta' AND t.name = 'user')
+CREATE TABLE mds_meta.[user] (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    email NVARCHAR(255) NOT NULL UNIQUE,
+    name NVARCHAR(255) NULL,
+    image NVARCHAR(MAX) NULL,
+    external_id NVARCHAR(255) NULL,
+    status NVARCHAR(20) NOT NULL DEFAULT 'active',
+    created_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    created_by NVARCHAR(100) NULL,
+    last_login_at DATETIME2 NULL,
+    CONSTRAINT CK_user_status CHECK (status IN ('active', 'inactive', 'pending'))
+);
+
+-- Widen image column if an older deploy already created it too small.
+-- Microsoft Entra ID returns the profile photo as a base64 data URI (several
+-- KB), which overflowed the original NVARCHAR(500) and silently broke user
+-- provisioning on real OAuth logins.
+IF EXISTS (
+  SELECT 1 FROM sys.columns
+  WHERE object_id = OBJECT_ID('mds_meta.[user]') AND name = 'image' AND max_length != -1
+)
+ALTER TABLE mds_meta.[user] ALTER COLUMN image NVARCHAR(MAX) NULL;
+{% endset %}
+
+{% set user_role_sql %}
+-- mds_meta.user_role Tabelle (Rollenzuweisung, optional pro Model gescoped)
+IF NOT EXISTS (SELECT * FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'mds_meta' AND t.name = 'user_role')
+CREATE TABLE mds_meta.user_role (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id INT NOT NULL,
+    role NVARCHAR(20) NOT NULL,
+    model_id INT NULL,
+    created_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    created_by NVARCHAR(100) NULL,
+    CONSTRAINT CK_user_role_role CHECK (role IN ('viewer', 'editor', 'approver', 'admin')),
+    CONSTRAINT FK__user_role__user_id FOREIGN KEY (user_id) REFERENCES mds_meta.[user](id) ON DELETE CASCADE,
+    CONSTRAINT FK__user_role__model_id FOREIGN KEY (model_id) REFERENCES mds_meta.model(id)
+);
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_user_role_user_id')
+CREATE INDEX IX_user_role_user_id ON mds_meta.user_role(user_id);
+{% endset %}
+
+{% set api_token_sql %}
+-- mds_meta.api_token Tabelle (gehashte API-Tokens pro User)
+IF NOT EXISTS (SELECT * FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'mds_meta' AND t.name = 'api_token')
+CREATE TABLE mds_meta.api_token (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id INT NOT NULL,
+    name NVARCHAR(200) NOT NULL,
+    token_hash CHAR(64) NOT NULL,
+    token_prefix NVARCHAR(20) NOT NULL,
+    scopes NVARCHAR(500) NOT NULL,
+    expires_at DATETIME2 NULL,
+    last_used_at DATETIME2 NULL,
+    revoked_at DATETIME2 NULL,
+    created_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    created_by NVARCHAR(100) NULL,
+    CONSTRAINT FK__api_token__user_id FOREIGN KEY (user_id) REFERENCES mds_meta.[user](id) ON DELETE CASCADE,
+    CONSTRAINT UQ__api_token__hash UNIQUE (token_hash)
+);
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_api_token_user_id')
+CREATE INDEX IX_api_token_user_id ON mds_meta.api_token(user_id);
+{% endset %}
+
 -- Ausführen
 {{ log("Creating MDS schemas...", info=True) }}
 {% do run_query(schemas_sql) %}
@@ -357,6 +426,15 @@ CREATE INDEX IX_job_type_status ON mds_meta.job([type], status);
 
 {{ log("Creating mds_meta.job table...", info=True) }}
 {% do run_query(job_sql) %}
+
+{{ log("Creating mds_meta.user table...", info=True) }}
+{% do run_query(user_sql) %}
+
+{{ log("Creating mds_meta.user_role table...", info=True) }}
+{% do run_query(user_role_sql) %}
+
+{{ log("Creating mds_meta.api_token table...", info=True) }}
+{% do run_query(api_token_sql) %}
 
 {{ log("MDS Bootstrap completed successfully!", info=True) }}
 

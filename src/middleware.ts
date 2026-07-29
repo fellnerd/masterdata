@@ -1,6 +1,13 @@
-import { auth } from '@/lib/auth';
+import NextAuth from 'next-auth';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { authConfig } from '@/lib/auth.config';
+
+// Edge-safe auth instance for middleware - built from auth.config.ts only
+// (no providers, no DB access), so it can be bundled for the Edge runtime.
+// The full instance (@/lib/auth) with providers and DB-backed callbacks is
+// only ever used by Node.js-runtime route handlers.
+const { auth } = NextAuth(authConfig);
 
 // Internal API secret for worker-to-api communication
 const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET || 'mds-worker-secret-dev';
