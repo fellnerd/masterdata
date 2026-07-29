@@ -834,12 +834,10 @@ async function runCommandWithStreaming(
 async function executeDbtCommand(job: Job<MdsJobData>, args: string[]): Promise<string[]> {
   return new Promise((resolve, reject) => {
     // Ensure dbt project path is set
-    const dbtProjectPath = process.env.DBT_PROJECT_PATH || 
-      '/home/user/projects/datavault-dbt/masterdata/dbt';
-    
+    const dbtProjectPath = process.env.DBT_PROJECT_PATH || '/app/dbt';
+
     // Use dbt from the project's virtual environment
-    const dbtCommand = process.env.DBT_COMMAND || 
-      '/home/user/projects/datavault-dbt/.venv/bin/dbt';
+    const dbtCommand = process.env.DBT_CMD || 'dbt';
     
     // Get credentials from environment
     const mdsUser = process.env.MDS_DB_USER || process.env.DB_USER;
