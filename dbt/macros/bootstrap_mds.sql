@@ -276,6 +276,15 @@ BEGIN
     ALTER TABLE mds_meta.import_source ADD db_trust_cert BIT NULL DEFAULT 0;
 END
 
+-- Git-Auth (SSH Deploy Key fuer private Repos) + GitHub Actions
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('mds_meta.import_source') AND name = 'git_auth_type')
+BEGIN
+    ALTER TABLE mds_meta.import_source ADD git_auth_type NVARCHAR(20) NOT NULL DEFAULT 'none';
+    ALTER TABLE mds_meta.import_source ADD git_ssh_private_key NVARCHAR(MAX) NULL;
+    ALTER TABLE mds_meta.import_source ADD github_api_token NVARCHAR(500) NULL;
+    ALTER TABLE mds_meta.import_source ADD workflows_json NVARCHAR(MAX) NULL;
+END
+
 -- Default-Eintrag wenn nicht vorhanden
 IF NOT EXISTS (SELECT 1 FROM mds_meta.import_source WHERE name = 'default')
 INSERT INTO mds_meta.import_source (name) VALUES ('default');

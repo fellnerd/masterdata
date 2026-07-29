@@ -237,10 +237,10 @@ function createMockQueue(): Queue<MdsJobData> {
   }> = [
     {
       id: 'mock-1',
-      name: 'dbt-run',
+      name: 'schema-deploy',
       data: {
-        type: 'dbt-run',
-        target: 'hub_customer, sat_customer',
+        type: 'schema-deploy',
+        target: 'customer',
         userId: 'admin',
         userName: 'Admin',
         createdAt: new Date().toISOString(),

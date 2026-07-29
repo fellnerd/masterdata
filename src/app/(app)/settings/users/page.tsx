@@ -277,8 +277,11 @@ export default function UsersPage() {
           <Callout intent="danger" icon="error" style={{ marginBottom: 16 }}>{error}</Callout>
         )}
         {actionError && (
-          <Callout intent="danger" icon="error" style={{ marginBottom: 16 }} onDismiss={() => setActionError(null)}>
-            {actionError}
+          <Callout intent="danger" icon="error" style={{ marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <span>{actionError}</span>
+              <Button icon="cross" minimal small onClick={() => setActionError(null)} aria-label="Dismiss" />
+            </div>
           </Callout>
         )}
 

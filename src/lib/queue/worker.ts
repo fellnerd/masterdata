@@ -21,12 +21,13 @@ console.log(`🔐 MDS_DB_PASSWORD: ${process.env.MDS_DB_PASSWORD ? 'SET (hidden)
 import { Worker, Job } from 'bullmq';
 import { spawn, ChildProcess } from 'child_process';
 import sql from 'mssql';
-import { 
-  getRedisConfig, 
-  QUEUE_NAMES, 
-  MdsJobData, 
-  JobProgress 
+import {
+  getRedisConfig,
+  QUEUE_NAMES,
+  MdsJobData,
+  JobProgress
 } from './config';
+import { parseGithubRepo } from '@/lib/github';
 
 // Database connection pool for worker
 let dbPool: sql.ConnectionPool | null = null;
@@ -70,71 +71,14 @@ async function getDbPool(): Promise<sql.ConnectionPool> {
 // Worker-spezifische Handler
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const jobHandlers: Record<string, (job: Job<MdsJobData>) => Promise<any>> = {
-  'dbt-run': handleDbtRun,
-  'dbt-test': handleDbtTest,
   'validate': handleValidate,
   'deploy': handleDeploy,
   'schema-deploy': handleSchemaDeploy,
   'bulk-commit': handleBulkCommit,
   'import': handleImport,
   'export': handleExport,
+  'github-action': handleGithubAction,
 };
-
-/**
- * dbt run Handler
- */
-async function handleDbtRun(job: Job<MdsJobData>): Promise<{ logs: string[] }> {
-  const { target, params } = job.data;
-  
-  // Small delay to allow SSE connection to establish
-  await delay(500);
-  
-  await updateProgress(job, 0, 'Starting dbt run...', ['🚀 Initializing dbt project...']);
-  await delay(200);
-  
-  // Build dbt command
-  const args = ['run'];
-  if (target && target !== '*') {
-    args.push('--select', target);
-  }
-  if (params?.fullRefresh) {
-    args.push('--full-refresh');
-  }
-
-  await updateProgress(job, 10, 'Running dbt models...', [`▶ Executing: dbt ${args.join(' ')}`]);
-  await delay(200);
-
-  // Execute dbt command and collect logs
-  const logs = await executeDbtCommand(job, args);
-  
-  await updateProgress(job, 100, 'dbt run completed', [...logs, '✅ All models executed successfully']);
-  
-  return { logs };
-}
-
-/**
- * dbt test Handler
- */
-async function handleDbtTest(job: Job<MdsJobData>): Promise<{ logs: string[] }> {
-  const { target } = job.data;
-  
-  // Small delay to allow SSE connection to establish
-  await delay(500);
-  
-  await updateProgress(job, 0, 'Starting dbt tests...', ['🧪 Initializing test runner...']);
-  await delay(200);
-  
-  const args = ['test'];
-  if (target && target !== '*') {
-    args.push('--select', target);
-  }
-
-  const logs = await executeDbtCommand(job, args);
-  
-  await updateProgress(job, 100, 'dbt tests completed', [...logs, '✅ All tests passed']);
-  
-  return { logs };
-}
 
 /**
  * Validation Handler
@@ -163,6 +107,104 @@ async function handleValidate(job: Job<MdsJobData>): Promise<void> {
     'Constraints: OK',
     'Business rules: OK',
   ]);
+}
+
+/**
+ * GitHub Action Handler - Does NOT execute anything itself. A workflow_dispatch
+ * call was already made by the trigger API route; this job only watches GitHub
+ * for the resulting run and mirrors its status here, since GitHub's dispatch
+ * API doesn't return a run ID directly (we have to find it by branch + timing).
+ */
+async function handleGithubAction(job: Job<MdsJobData>): Promise<void> {
+  const { params } = job.data;
+  const workflowFilename = params?.workflowFilename as string | undefined;
+  const dispatchedAt = params?.dispatchedAt as string | undefined;
+
+  if (!workflowFilename) {
+    throw new Error('No workflow filename provided');
+  }
+
+  await updateProgress(job, 0, 'Warte auf GitHub Actions Run...', [`Workflow: ${workflowFilename}`]);
+
+  const pool = await getDbPool();
+  const configResult = await pool.request().query(`
+    SELECT git_url, git_branch, github_api_token
+    FROM mds_meta.import_source WHERE name = 'default'
+  `);
+  const config = configResult.recordset[0];
+
+  if (!config?.git_url || !config?.github_api_token) {
+    throw new Error('GitHub repo or API token not configured (Settings → Configuration → dbt Project)');
+  }
+
+  const repo = parseGithubRepo(config.git_url);
+  if (!repo) {
+    throw new Error(`Could not parse GitHub owner/repo from git_url: ${config.git_url}`);
+  }
+
+  const headers = {
+    Authorization: `Bearer ${config.github_api_token}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+
+  // Step 1: find the run GitHub created for our dispatch. There's no direct
+  // handle for this - match the newest run on the branch created at/after
+  // the dispatch timestamp (small negative tolerance for clock skew).
+  const dispatchTime = dispatchedAt ? new Date(dispatchedAt).getTime() : Date.now();
+  let runId: number | null = null;
+  let runUrl: string | null = null;
+
+  for (let attempt = 1; attempt <= 10 && !runId; attempt++) {
+    await updateProgress(job, 5, 'Suche passenden Workflow-Run...', [`Versuch ${attempt}/10`]);
+    await delay(3000);
+
+    const runsRes = await fetch(
+      `https://api.github.com/repos/${repo.owner}/${repo.repo}/actions/workflows/${workflowFilename}/runs?branch=${encodeURIComponent(config.git_branch)}&per_page=5`,
+      { headers }
+    );
+    if (!runsRes.ok) continue;
+
+    const data = await runsRes.json();
+    const candidate = (data.workflow_runs || []).find((run: { created_at: string }) =>
+      new Date(run.created_at).getTime() >= dispatchTime - 15000
+    );
+    if (candidate) {
+      runId = candidate.id;
+      runUrl = candidate.html_url;
+    }
+  }
+
+  if (!runId) {
+    throw new Error('Konnte den ausgelösten Run nicht finden (Timeout nach 30s)');
+  }
+
+  await updateProgress(job, 20, 'Run gefunden', [`Run ID: ${runId}`, `URL: ${runUrl}`]);
+
+  // Step 2: poll until GitHub reports the run as completed
+  const maxPolls = 100; // 100 * 5s = ~8 min, bounded by the job's own 20 min timeout too
+  for (let i = 0; i < maxPolls; i++) {
+    const runRes = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.repo}/actions/runs/${runId}`, { headers });
+    if (!runRes.ok) {
+      throw new Error(`GitHub API error while polling run status: ${runRes.status}`);
+    }
+    const run = await runRes.json();
+
+    if (run.status === 'completed') {
+      const conclusion = run.conclusion as string;
+      await updateProgress(job, 100, `Workflow ${conclusion}`, [`Conclusion: ${conclusion}`, `Run: ${runUrl}`]);
+      if (conclusion !== 'success') {
+        throw new Error(`GitHub Actions Run ${conclusion}: ${runUrl}`);
+      }
+      return;
+    }
+
+    const percent = run.status === 'in_progress' ? 60 : 30;
+    await updateProgress(job, percent, `Status: ${run.status}`, [`Run: ${runUrl}`]);
+    await delay(5000);
+  }
+
+  throw new Error(`Timeout beim Warten auf Workflow-Abschluss: ${runUrl}`);
 }
 
 /**
@@ -315,7 +357,7 @@ async function handleDataVaultImport(
   ]);
 
   // MDS dbt project path - contains the import_from_datavault macro
-  const mdsDbtPath = process.env.MDS_DBT_PATH || '/home/user/projects/datavault-dbt/masterdata/dbt';
+  const mdsDbtPath = process.env.MDS_DBT_PATH || '/app/dbt';
   
   // Import source path (cloned Data Vault project) - used for profiles.yml
   const importSourcePath = process.env.DBT_IMPORT_SOURCE_PATH || '/tmp/mds-dbt-source';
@@ -341,7 +383,7 @@ async function handleDataVaultImport(
   // Check if dbt_packages exists in MDS dbt project, if not run dbt deps
   const dbtPackagesPath = `${mdsDbtPath}/dbt_packages`;
   // Use dbt from venv with sqlserver adapter
-  const dbtCmd = process.env.DBT_CMD || '/home/user/projects/datavault-dbt/.venv/bin/dbt';
+  const dbtCmd = process.env.DBT_CMD || 'dbt';
   
   if (!fs.existsSync(dbtPackagesPath)) {
     logs.push(`📦 Installing dbt packages for MDS project...`);
@@ -390,7 +432,7 @@ async function handleDataVaultImport(
     // Execute dbt command with spawn in MDS dbt project directory
     // The import_from_datavault macro is defined in masterdata/dbt/macros/
     // Use dbt from venv with sqlserver adapter
-    const dbtCmd = process.env.DBT_CMD || '/home/user/projects/datavault-dbt/.venv/bin/dbt';
+    const dbtCmd = process.env.DBT_CMD || 'dbt';
     const proc = spawn(dbtCmd, [
       'run-operation', 'import_from_datavault',
       '--args', `'${dbtArgs}'`,
@@ -630,11 +672,11 @@ async function handleSchemaDeploy(job: Job<MdsJobData>): Promise<void> {
     ]);
 
     const entityIdList = entityIds.join(',');
-    const pythonCmd = process.env.PYTHON_CMD || 'python';
+    const pythonCmd = process.env.PYTHON_CMD || 'python3';
     const genResult = await runCommandWithStreaming(
       pythonCmd,
       [
-        process.env.GENERATE_MODELS_PATH || '/app/scripts/generate_models.py',
+        process.env.GENERATE_MODELS_PATH || '/app/dbt/scripts/generate_models.py',
         '--entity-ids', entityIdList
       ],
       job,
@@ -663,7 +705,7 @@ async function handleSchemaDeploy(job: Job<MdsJobData>): Promise<void> {
     }
     
     // Use dbt from venv with sqlserver adapter
-    const dbtCmd = process.env.DBT_CMD || '/home/user/projects/datavault-dbt/.venv/bin/dbt';
+    const dbtCmd = process.env.DBT_CMD || 'dbt';
     
     const dbtArgs = [
       'run',
@@ -685,7 +727,7 @@ async function handleSchemaDeploy(job: Job<MdsJobData>): Promise<void> {
     ]);
 
     // Step 4: Update entity and schema_deployment status via API
-    const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:3002';
+    const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
     const apiSecret = process.env.INTERNAL_API_SECRET || 'mds-worker-secret-dev';
     const response = await fetch(`${apiBaseUrl}/api/deploy/schema`, {
       method: 'PUT',

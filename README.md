@@ -38,16 +38,99 @@ npm run dev:webpack
 
 ## 🐳 Docker Deployment
 
-```bash
-# Alle Services starten (App + Worker + Redis)
-docker-compose up -d
+Diese Anleitung ist so geschrieben, dass sie ohne weiteren Kontext (auch von
+einem KI-Agenten) ausführbar ist - inklusive der Stolperfallen, die beim
+Aufsetzen typischerweise auftreten.
 
-# Logs ansehen
+### Architektur
+
+Zwei Container, ein `docker-compose.yml`:
+
+- **`mds-app`** - Next.js Frontend + API (Port 3000), enthält das embedded
+  dbt-Projekt (`./dbt`) und führt beim Start einmalig `dbt run-operation
+  bootstrap_mds` aus (legt `mds_meta`-Schema/Tabellen idempotent an).
+- **`mds-worker`** - BullMQ Job-Prozessor (kein Port), führt strukturierte
+  dbt-Kommandos (`schema-deploy`, `deploy`, Data-Vault-Import) ausschließlich
+  gegen das **eigene** embedded dbt-Projekt aus - niemals gegen extern via
+  Settings→Config verbundene (nur lesend erlaubte) dbt-Projekte.
+- **Redis** ist kein eigener Container in `docker-compose.yml` - beide
+  Services verbinden sich standardmäßig zu Upstash (cloud) über
+  `UPSTASH_REDIS_URL`. Für selbst gehostetes Redis siehe unten.
+- Beide Container erreichen sich im selben Compose-Netzwerk über ihren
+  Service-Namen (`mds-app`, `mds-worker`), **nicht** über `localhost` - jeder
+  Container hat sein eigenes Loopback-Interface.
+
+### Schritt für Schritt
+
+```bash
+# 1. Repo klonen (falls noch nicht vorhanden)
+git clone git@github.com:fellnerd/masterdata.git
+cd masterdata
+
+# 2. .env aus Vorlage anlegen und ALLE Pflichtwerte eintragen
+cp .env.example .env
+```
+
+In `.env` müssen mindestens gesetzt werden (siehe Abschnitt "Umgebungsvariablen"
+weiter unten für die vollständige Liste, [.env.example](.env.example) für Kommentare):
+
+- `AUTH_SECRET` - `openssl rand -base64 32`
+- `AUTH_URL` - die öffentliche URL, unter der die App erreichbar sein wird (z. B. `https://mds.example.com`)
+- `DB_SERVER`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` - Azure SQL Verbindung
+- `INTERNAL_API_SECRET` - `openssl rand -hex 32` (muss in App und Worker identisch sein; wird von docker-compose automatisch in beide Container injiziert)
+- `UPSTASH_REDIS_URL` - Upstash (cloud) Redis-Connection-String
+
+Es gibt **keine** funktionierenden Standardwerte für diese Variablen im
+Code oder in `docker-compose.yml` - ein leerer Wert führt zu einem klaren
+Verbindungsfehler beim Start, nicht zu einer stillen Fehlkonfiguration.
+
+```bash
+# 3. Beide Container bauen und starten
+docker-compose up -d --build
+
+# 4. Logs verfolgen - insbesondere den dbt-Bootstrap-Output von mds-app
+#    ("Running with dbt=..." / "Completed successfully" o.ä.) und den
+#    Worker-Start ("MDS Worker started, waiting for jobs...")
 docker-compose logs -f
+
+# 5. Health-Check
+curl -f http://localhost:3000/api/health
+# erwartet: {"status":"healthy", ...}
 
 # Stoppen
 docker-compose down
 ```
+
+### Bekannte Stolperfallen (bereits im Repo behoben, aber gut zu wissen)
+
+- **Alpine-Basisimage ist bewusst auf `node:22-alpine3.21` gepinnt**, nicht
+  das floatende `node:22-alpine`. Neuere Alpine-Releases liefern Python 3.14
+  aus, dessen C-API-Änderung den Build von `pyodbc` (Abhängigkeit von
+  `dbt-sqlserver==1.9.0`) mit `error: too few arguments to function
+  '_PyLong_AsByteArray'` scheitern lässt. Nicht auf `node:22-alpine`
+  zurückändern, ohne vorher zu prüfen, welche Python-Version die gewählte
+  Alpine-Version mitbringt (muss ≤ 3.12 sein).
+- **`docker buildx` Fehler `lease does not exist: not found`** beim Pull des
+  Basisimages ist ein lokales Docker-Desktop-Cache-Problem, kein
+  Dockerfile-Fehler. Fix: `docker buildx prune -af` und erneut bauen.
+- **`DBT_TARGET`** (nicht `MDS_DBT_TARGET` o. ä.) ist der Variablenname, den
+  sowohl `worker.ts` als auch `dbt/profiles.yml` lesen. Ein falscher
+  Variablenname führt dazu, dass dbt-Kommandos still auf das `local`-Target
+  zurückfallen.
+- Worker → App Kommunikation läuft über `API_BASE_URL=http://mds-app:3000`
+  (Compose-Service-Name). Mit `localhost` erreicht der Worker-Container die
+  App nicht.
+
+### Alternative: selbst gehostetes Redis
+
+`docker-compose.redis.yml` startet einen lokalen Redis-Container als
+Alternative zu Upstash:
+
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.redis.yml up -d --build
+```
+
+Dann in `.env`: `UPSTASH_REDIS_URL` leer lassen und `REDIS_HOST=redis` setzen.
 
 ## 📁 Projektstruktur
 
@@ -95,14 +178,19 @@ masterdata/
 
 ## 🔧 Umgebungsvariablen
 
+Vollständige, aktuelle Liste in [.env.example](.env.example). Wichtigste Pflichtwerte:
+
 | Variable | Beschreibung | Standard |
 |----------|-------------|----------|
-| `AUTH_SECRET` | NextAuth Secret | - |
-| `DB_SERVER` | Azure SQL Server | - |
-| `DB_NAME` | Datenbankname | `Vault` |
-| `DB_MOCK` | Mock-Modus | `false` |
-| `REDIS_HOST` | Redis Host | `localhost` |
-| `QUEUE_MOCK` | Queue Mock-Modus | `false` |
+| `AUTH_SECRET` | NextAuth Secret (`openssl rand -base64 32`) | - |
+| `AUTH_URL` | Öffentliche URL der App (OAuth-Callbacks) | - |
+| `DB_SERVER` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Azure SQL Verbindung | - |
+| `INTERNAL_API_SECRET` | Shared Secret Worker↔App (`openssl rand -hex 32`) | - |
+| `UPSTASH_REDIS_URL` | Upstash Redis (cloud) | - |
+| `REDIS_HOST` / `REDIS_PORT` | Alternative: selbst gehostetes Redis | - |
+| `DBT_TARGET` | dbt Profile-Target beider Container | `prod` |
+| `DB_MOCK` | Mock-Modus (kein DB-Zugriff) | `false` |
+| `QUEUE_MOCK` | Queue Mock-Modus (kein Redis) | `false` |
 | `NEXT_PUBLIC_DEV_MODE` | Dev Login aktivieren | `false` |
 
 ## 📡 API Endpoints
@@ -137,9 +225,3 @@ npm run build
 ## 📝 License
 
 MIT
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

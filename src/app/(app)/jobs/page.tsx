@@ -334,6 +334,7 @@ export default function JobsPage() {
       case 'schema-deploy': return 'database'
       case 'import': return 'import'
       case 'export': return 'export'
+      case 'github-action': return 'git-branch'
       default: return 'cog'
     }
   }
@@ -348,6 +349,7 @@ export default function JobsPage() {
       case 'schema-deploy': return 'Schema Deploy'
       case 'import': return 'Import'
       case 'export': return 'Export'
+      case 'github-action': return 'GitHub Action'
       default: return type
     }
   }

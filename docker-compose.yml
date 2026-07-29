@@ -1,5 +1,5 @@
 # Master Data Services - Docker Compose
-# 
+#
 # Services:
 # - mds-app: Next.js frontend (Port 3000) mit embedded dbt
 # - mds-worker: BullMQ job worker mit dbt für async Jobs
@@ -11,8 +11,15 @@
 #   docker-compose logs -f        # View logs
 #   docker-compose down           # Stop all services
 #
-# Bei Start führt mds-app automatisch "dbt run --select tag:bootstrap"
-# aus um alle MDS Schemas und Tabellen zu erstellen.
+# Required in .env before first deploy (no insecure defaults are baked in):
+#   AUTH_SECRET, AUTH_URL (public URL, e.g. https://mds.example.com)
+#   DB_SERVER, DB_NAME, DB_USER, DB_PASSWORD
+#   UPSTASH_REDIS_URL
+#   INTERNAL_API_SECRET (generate with: openssl rand -hex 32) - shared secret
+#     mds-worker uses to call back into mds-app's deploy-status endpoints
+#
+# Bei Start führt mds-app automatisch "dbt run-operation bootstrap_mds"
+# aus um alle mds_meta Schemas und Tabellen anzulegen (idempotent).
 
 services:
   # Next.js Application with embedded dbt
@@ -28,22 +35,31 @@ services:
       - NODE_ENV=production
       # Auth
       - AUTH_SECRET=${AUTH_SECRET}
-      - AUTH_URL=http://localhost:3000
+      - AUTH_URL=${AUTH_URL}
       # Azure AD (optional for Microsoft login)
       - AUTH_MICROSOFT_ENTRA_ID_ID=${AUTH_MICROSOFT_ENTRA_ID_ID:-}
       - AUTH_MICROSOFT_ENTRA_ID_SECRET=${AUTH_MICROSOFT_ENTRA_ID_SECRET:-}
       - AUTH_MICROSOFT_ENTRA_ID_ISSUER=${AUTH_MICROSOFT_ENTRA_ID_ISSUER:-}
       # Database (für Next.js API)
-      - DB_SERVER=${DB_SERVER:-sql-datavault-weu-001.database.windows.net}
-      - DB_NAME=${DB_NAME:-Vault}
+      - DB_SERVER=${DB_SERVER}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
       - DB_MOCK=${DB_MOCK:-false}
       # dbt Database Connection (für Container-Start Bootstrap)
-      - MDS_DB_SERVER=${DB_SERVER:-sql-datavault-weu-001.database.windows.net}
-      - MDS_DB_DATABASE=${DB_NAME:-Vault}
-      - MDS_DB_USER=${DB_USER:-}
-      - MDS_DB_PASSWORD=${DB_PASSWORD:-}
-      # Redis - Upstash (cloud)
-      - UPSTASH_REDIS_URL=${UPSTASH_REDIS_URL}
+      - MDS_DB_SERVER=${DB_SERVER}
+      - MDS_DB_DATABASE=${DB_NAME}
+      - MDS_DB_USER=${DB_USER}
+      - MDS_DB_PASSWORD=${DB_PASSWORD}
+      - DBT_TARGET=${DBT_TARGET:-prod}
+      # Internal worker-callback secret (must match mds-worker)
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # Redis - Upstash (cloud) by default, or REDIS_HOST/PORT for a
+      # self-hosted Redis (e.g. docker-compose.redis.yml)
+      - UPSTASH_REDIS_URL=${UPSTASH_REDIS_URL:-}
+      - REDIS_HOST=${REDIS_HOST:-}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - QUEUE_MOCK=${QUEUE_MOCK:-false}
       # Dev mode (disable in production)
       - NEXT_PUBLIC_DEV_MODE=${NEXT_PUBLIC_DEV_MODE:-false}
@@ -60,22 +76,40 @@ services:
       dockerfile: Dockerfile.worker
     container_name: mds-worker
     restart: unless-stopped
+    depends_on:
+      - mds-app
     environment:
       - NODE_ENV=production
       # Database (für dbt)
-      - DB_SERVER=${DB_SERVER:-sql-datavault-weu-001.database.windows.net}
-      - DB_NAME=${DB_NAME:-Vault}
+      - DB_SERVER=${DB_SERVER}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
       - DB_MOCK=${DB_MOCK:-false}
       # dbt Database Connection
-      - MDS_DB_SERVER=${DB_SERVER:-sql-datavault-weu-001.database.windows.net}
-      - MDS_DB_DATABASE=${DB_NAME:-Vault}
-      - MDS_DB_USER=${DB_USER:-}
-      - MDS_DB_PASSWORD=${DB_PASSWORD:-}
-      - MDS_DBT_TARGET=${DBT_TARGET:-prod}
+      - MDS_DB_SERVER=${DB_SERVER}
+      - MDS_DB_DATABASE=${DB_NAME}
+      - MDS_DB_USER=${DB_USER}
+      - MDS_DB_PASSWORD=${DB_PASSWORD}
+      - DBT_TARGET=${DBT_TARGET:-prod}
       - DBT_PROFILES_DIR=/app/dbt
-      # Redis - Upstash (cloud)
-      - UPSTASH_REDIS_URL=${UPSTASH_REDIS_URL}
+      - DBT_PROJECT_PATH=/app/dbt
+      - DBT_CMD=dbt
+      - PYTHON_CMD=python3
+      - GENERATE_MODELS_PATH=/app/dbt/scripts/generate_models.py
+      # mds-app is reachable by its Compose service name on the shared network,
+      # not via localhost (each container has its own loopback)
+      - API_BASE_URL=http://mds-app:3000
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # Redis - Upstash (cloud) by default, or REDIS_HOST/PORT for a
+      # self-hosted Redis (e.g. docker-compose.redis.yml)
+      - UPSTASH_REDIS_URL=${UPSTASH_REDIS_URL:-}
+      - REDIS_HOST=${REDIS_HOST:-}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       # Worker settings
       - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-2}
 
-# No volumes needed - using Upstash Redis (cloud)
+# No local volumes needed when using Upstash (cloud) Redis. If running
+# alongside docker-compose.redis.yml instead, that file defines its own
+# persistent volume for the self-hosted Redis container.

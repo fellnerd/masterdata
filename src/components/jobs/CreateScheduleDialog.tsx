@@ -21,9 +21,9 @@ interface CreateScheduleDialogProps {
   onSuccess?: () => void
 }
 
+// Bewusst kein "dbt-run"/"dbt-test" mit freiem Model-Selector - masterdata soll
+// dbt nie als direkten Rohbefehl ausführen, nur über strukturierte Aktionen.
 const JOB_TYPES: Array<{ value: JobType; label: string; description: string }> = [
-  { value: 'dbt-run', label: 'dbt Run', description: 'dbt Models ausführen' },
-  { value: 'dbt-test', label: 'dbt Test', description: 'dbt Tests ausführen' },
   { value: 'validate', label: 'Validierung', description: 'Datenvalidierung durchführen' },
   { value: 'deploy', label: 'Data Deploy', description: 'Daten in Data Vault deployen' },
   { value: 'schema-deploy', label: 'Schema Deploy', description: 'Schema-Änderungen deployen' },
@@ -34,7 +34,7 @@ export function CreateScheduleDialog({ isOpen, onClose, onSuccess }: CreateSched
   
   // Form state
   const [name, setName] = useState('')
-  const [jobType, setJobType] = useState<JobType>('dbt-run')
+  const [jobType, setJobType] = useState<JobType>('schema-deploy')
   const [target, setTarget] = useState('')
   const [cronPreset, setCronPreset] = useState<string>(CRON_PRESETS[1].value) // Daily midnight
   const [customCron, setCustomCron] = useState('')
@@ -102,23 +102,17 @@ export function CreateScheduleDialog({ isOpen, onClose, onSuccess }: CreateSched
           </HTMLSelect>
         </FormGroup>
         
-        <FormGroup 
-          label="Target" 
+        <FormGroup
+          label="Target"
           labelInfo="(erforderlich)"
           helperText={
-            jobType === 'dbt-run' || jobType === 'dbt-test' 
-              ? 'dbt Selector, z.B. "hub_customer sat_customer" oder "*"'
-              : jobType === 'deploy' || jobType === 'schema-deploy'
+            jobType === 'deploy' || jobType === 'schema-deploy'
               ? 'Entity-Code(s), z.B. "customer" oder "all"'
               : 'Target-Beschreibung'
           }
         >
           <InputGroup
-            placeholder={
-              jobType === 'dbt-run' ? 'hub_* sat_*' : 
-              jobType === 'dbt-test' ? '*' :
-              'all'
-            }
+            placeholder="all"
             value={target}
             onChange={(e) => setTarget(e.target.value)}
           />

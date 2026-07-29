@@ -3,7 +3,7 @@ import { useState, useCallback } from 'react'
 
 // Types matching the API response
 export type JobStatus = 'queued' | 'waiting' | 'active' | 'running' | 'completed' | 'failed' | 'cancelled' | 'delayed' | 'unknown'
-export type JobType = 'dbt-run' | 'dbt-test' | 'validate' | 'deploy' | 'schema-deploy' | 'import' | 'export' | 'sync' | 'cleanup'
+export type JobType = 'validate' | 'deploy' | 'schema-deploy' | 'import' | 'export' | 'sync' | 'cleanup' | 'github-action'
 
 export interface Job {
   id: string

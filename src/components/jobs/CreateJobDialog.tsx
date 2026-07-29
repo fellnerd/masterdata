@@ -38,25 +38,6 @@ const jobTypeConfig: Record<JobType, {
   targetPlaceholder?: string;
   extraParams?: { key: string; label: string; type: 'checkbox' | 'text'; default?: string | boolean }[];
 }> = {
-  'dbt-run': {
-    label: 'dbt Run',
-    icon: 'build',
-    description: 'Führt dbt Models aus',
-    hasTarget: true,
-    targetLabel: 'Model/Tag Selector',
-    targetPlaceholder: '* (alle) oder tag:marts oder model_name',
-    extraParams: [
-      { key: 'fullRefresh', label: 'Full Refresh (--full-refresh)', type: 'checkbox', default: false }
-    ]
-  },
-  'dbt-test': {
-    label: 'dbt Test',
-    icon: 'lab-test',
-    description: 'Führt dbt Tests aus',
-    hasTarget: true,
-    targetLabel: 'Test Selector',
-    targetPlaceholder: '* (alle) oder test:generic oder model_name',
-  },
   'validate': {
     label: 'Validierung',
     icon: 'tick-circle',
@@ -114,26 +95,38 @@ const jobTypeConfig: Record<JobType, {
     extraParams: [
       { key: 'olderThanDays', label: 'Älter als (Tage)', type: 'text', default: '30' }
     ]
+  },
+  'github-action': {
+    // Not offered in defaultJobTypes below - these jobs are only ever created
+    // by the "Trigger" button on the Config page, never started by hand here
+    // with a free-text target (that's exactly the unstructured dbt-run/dbt-test
+    // pattern this dialog intentionally no longer supports).
+    label: 'GitHub Action',
+    icon: 'git-branch',
+    description: 'Beobachtet einen extern laufenden GitHub Actions Workflow',
+    hasTarget: false,
   }
 };
 
-// Standardmäßig verfügbare Job-Typen
-const defaultJobTypes: JobType[] = ['dbt-run', 'dbt-test', 'validate', 'deploy', 'schema-deploy'];
+// Standardmäßig verfügbare Job-Typen - bewusst nur strukturierte, entity-/commit-
+// gebundene Aktionen. Kein "dbt-run"/"dbt-test" mit freiem Model-Selector:
+// masterdata soll dbt nie als direkten Rohbefehl ausführen können.
+const defaultJobTypes: JobType[] = ['validate', 'deploy', 'schema-deploy'];
 
 export function CreateJobDialog({ isOpen, onClose, onJobCreated }: CreateJobDialogProps) {
-  const [jobType, setJobType] = useState<JobType>('dbt-run');
+  const [jobType, setJobType] = useState<JobType>('schema-deploy');
   const [target, setTarget] = useState('*');
   const [params, setParams] = useState<Record<string, string | boolean>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+
   const startJobMutation = useStartJob();
-  
+
   const config = jobTypeConfig[jobType];
-  
+
   // Reset form when dialog opens
   const handleOpen = useCallback(() => {
-    setJobType('dbt-run');
+    setJobType('schema-deploy');
     setTarget('*');
     setParams({});
     setError(null);

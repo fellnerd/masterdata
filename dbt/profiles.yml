@@ -24,12 +24,12 @@ mds:
     local:
       type: sqlserver
       driver: 'ODBC Driver 18 for SQL Server'
-      server: "sql-datavault-weu-001.database.windows.net"
-      database: "Vault"
+      server: "{{ env_var('MDS_DB_SERVER', 'sql-datavault-weu-001.database.windows.net') }}"
+      database: "{{ env_var('MDS_DB_DATABASE', 'Vault') }}"
       schema: mds_meta
       authentication: sql
-      user: "sqladmin"
-      password: "Felldl1304#1988#"
+      user: "{{ env_var('MDS_DB_USER') }}"
+      password: "{{ env_var('MDS_DB_PASSWORD') }}"
       encrypt: true
       trust_cert: false
       threads: 4

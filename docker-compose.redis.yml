@@ -1,3 +1,7 @@
+# Optional self-hosted Redis, as an alternative to Upstash (cloud).
+# Run together with the main compose file so both share one network/project:
+#   docker-compose -f docker-compose.yml -f docker-compose.redis.yml up -d --build
+# Then in .env: leave UPSTASH_REDIS_URL empty and set REDIS_HOST=redis
 version: '3.8'
 
 services:

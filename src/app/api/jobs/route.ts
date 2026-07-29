@@ -81,8 +81,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { type, target, params, scheduled } = body;
 
-    // Validate job type
-    const validTypes: JobType[] = ['dbt-run', 'dbt-test', 'validate', 'deploy', 'import', 'export', 'schema-deploy'];
+    // Validate job type - no 'dbt-run'/'dbt-test': masterdata never executes a
+    // raw dbt command with a free-text selector, only structured, entity-/
+    // commit-bound actions (schema-deploy, deploy).
+    const validTypes: JobType[] = ['validate', 'deploy', 'import', 'export', 'schema-deploy'];
     if (!validTypes.includes(type)) {
       return NextResponse.json(
         { error: `Invalid job type: ${type}` },

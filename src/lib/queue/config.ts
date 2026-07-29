@@ -1,12 +1,14 @@
 /**
  * BullMQ Queue Configuration
- * 
- * Job Queue für asynchrone Operationen:
- * - dbt-run: dbt Models ausführen
- * - dbt-test: dbt Tests ausführen  
+ *
+ * Job Queue für asynchrone Operationen. Hinweis: es gibt bewusst KEINEN
+ * generischen "dbt-run"/"dbt-test" Job-Typ mit freiem Model-Selector -
+ * masterdata führt dbt nur über strukturierte, entity-/commit-gebundene
+ * Aktionen aus (schema-deploy, deploy), nie als direkter Rohbefehl.
  * - validate: Datenvalidierung
  * - deploy: Deployment zu Target-DB
  * - schema-deploy: Schema-Änderungen deployen (generate_models.py + dbt run)
+ * - github-action: Beobachtet einen extern (GitHub Actions) laufenden Workflow-Run
  * - import: CSV/Excel Import
  * - export: CSV/Excel Export
  */
@@ -61,15 +63,14 @@ export const QUEUE_NAMES = {
 } as const;
 
 // Job Types
-export type JobType = 
-  | 'dbt-run'
-  | 'dbt-test'
+export type JobType =
   | 'validate'
   | 'deploy'
   | 'schema-deploy'
   | 'bulk-commit'
   | 'import'
-  | 'export';
+  | 'export'
+  | 'github-action';
 
 // Job Data Interface
 export interface MdsJobData {
@@ -115,12 +116,11 @@ export const DEFAULT_JOB_OPTIONS = {
 
 // Job Type Specific Options
 export const JOB_TYPE_OPTIONS: Record<JobType, { timeout: number; priority: number }> = {
-  'dbt-run': { timeout: 30 * 60 * 1000, priority: 2 },       // 30 min
-  'dbt-test': { timeout: 15 * 60 * 1000, priority: 3 },      // 15 min
   'validate': { timeout: 10 * 60 * 1000, priority: 1 },      // 10 min, highest priority
   'deploy': { timeout: 60 * 60 * 1000, priority: 4 },        // 1 hour
   'schema-deploy': { timeout: 30 * 60 * 1000, priority: 2 }, // 30 min for generate_models + dbt
   'bulk-commit': { timeout: 30 * 60 * 1000, priority: 1 },   // 30 min, high priority
   'import': { timeout: 30 * 60 * 1000, priority: 2 },        // 30 min
   'export': { timeout: 15 * 60 * 1000, priority: 3 },        // 15 min
+  'github-action': { timeout: 20 * 60 * 1000, priority: 3 }, // 20 min - just polling, not doing the work itself
 };
