@@ -33,21 +33,32 @@ VIEWS_DIR = Path(__file__).parent.parent / "models" / "mds_view"
 # SQL Login aus Environment Variables (MDS_DB_USER, MDS_DB_PASSWORD)
 def build_connection_string():
     """Baut Connection String mit SQL Auth aus Environment Variables"""
+    server = os.environ.get("MDS_DB_SERVER", "sql-datavault-weu-001.database.windows.net")
+    database = os.environ.get("MDS_DB_DATABASE", "Vault")
     user = os.environ.get("MDS_DB_USER", "sqladmin")
     password = os.environ.get("MDS_DB_PASSWORD")
-    
+
     if password:
         # SQL Login
         return (
             "DRIVER={ODBC Driver 18 for SQL Server};"
-            "SERVER=sql-datavault-weu-001.database.windows.net;"
-            "DATABASE=Vault;"
+            f"SERVER={server};"
+            f"DATABASE={database};"
             f"UID={user};"
             f"PWD={password};"
             "TrustServerCertificate=yes"
         )
     else:
         raise ValueError("MDS_DB_PASSWORD environment variable is required")
+
+# Optionaler Commit-Filter fuer selektives Deploy (dbt --vars deploy_commit_ids).
+# WICHTIG: pre_hook/post_hook Strings werden von dbt in einem EIGENEN Jinja-Kontext
+# gerendert, der KEINEN Zugriff auf {% set %}-Variablen aus dem Hauptteil des Modells
+# hat. var() ist aber ein globaler Kontext-Aufruf und funktioniert ueberall - deshalb
+# hier direkt inline in jedem Hook (und im SELECT) aufrufen, statt eine {% set %}
+# Variable zu referenzieren.
+COMMIT_FILTER = "{% if var('deploy_commit_ids', none) %} AND c.id IN ({{ var('deploy_commit_ids')|join(',') }}){% endif %}"
+COMMIT_FILTER_PLAIN = "{% if var('deploy_commit_ids', none) %} AND id IN ({{ var('deploy_commit_ids')|join(',') }}){% endif %}"
 
 # SQL Server Typ Mapping
 SQL_TYPE_MAP = {
@@ -89,6 +100,51 @@ def get_connection():
     """Erstellt Datenbankverbindung mit SQL Auth"""
     conn_str = build_connection_string()
     return pyodbc.connect(conn_str)
+
+
+def get_sql_type(attr):
+    """Bestimmt den SQL-Typ für ein Attribut (berücksichtigt max_length)"""
+    data_type = attr.get('data_type')
+    max_length = attr.get('max_length')
+    if data_type == 'string' and max_length:
+        return f'NVARCHAR({max_length})'
+    return SQL_TYPE_MAP.get(data_type, 'NVARCHAR(MAX)')
+
+
+def ensure_columns(conn, schema, table, attributes):
+    """Schema-Sync: legt fehlende Attribut-Spalten in einer bestehenden Tabelle nach.
+
+    dbt-sqlserver's on_schema_change ist unzuverlässig (funktioniert nicht für die
+    'append' Incremental-Strategie und liefert bei 'merge' teils falsche Typen).
+    Deshalb wird der Spaltenabgleich hier explizit und mit den korrekten Typen aus
+    mds_meta.attribute vorgenommen, bevor dbt läuft.
+    """
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+    """, schema, table)
+    existing = {row.COLUMN_NAME.lower() for row in cursor.fetchall()}
+
+    if not existing:
+        # Tabelle existiert noch nicht - dbt legt sie mit allen aktuellen Attributen an
+        return
+
+    added = []
+    for attr in attributes:
+        col = attr['code']
+        if col.lower() not in existing:
+            sql_type = get_sql_type(attr)
+            escaped_col = escape_sql_identifier(col)
+            escaped_table = escape_sql_identifier(table)
+            cursor.execute(
+                f"ALTER TABLE {schema}.{escaped_table} ADD {escaped_col} {sql_type} NULL"
+            )
+            added.append(f"{col} ({sql_type})")
+
+    if added:
+        conn.commit()
+        print(f"  🔧 Schema-Sync: Spalte(n) hinzugefügt in {schema}.{table}: {', '.join(added)}")
 
 
 def get_entities(conn, entity_code=None, entity_ids=None):
@@ -210,6 +266,8 @@ def generate_model_sql(entity, attributes):
     # mds_load.<entity> hat: id, business_key_hash, business_key, <attrs>, commit_id, operation, source_system, source_id, is_processed, created_at, processed_at
     # WICHTIG: alias OHNE Brackets, dbt-sqlserver escaped automatisch
     # on_schema_change='sync_all_columns' erlaubt das Hinzufügen neuer Attribute nach Deployment
+    # deploy_commit_ids (optionale dbt --vars): wenn gesetzt, wird nur der Status
+    # dieser Commits auf 'deployed' gesetzt - sonst (Standard) alle 'loaded' Commits der Entity.
     model_sql = f'''{{{{
   config(
     materialized='incremental',
@@ -240,7 +298,7 @@ def generate_model_sql(entity, attributes):
       "-- Mark load records as processed",
       "UPDATE {load_table} SET is_processed = 1, processed_at = GETUTCDATE() WHERE is_processed = 0",
       "-- Update commit status to 'deployed' for all loaded commits",
-      "UPDATE mds_stage.[commit] SET status = 'deployed' WHERE status = 'loaded' AND entity_id = {entity_id}",
+      "UPDATE mds_stage.[commit] SET status = 'deployed' WHERE status = 'loaded' AND entity_id = {entity_id}{COMMIT_FILTER_PLAIN}",
       "-- Remove DELETE records from load (they should not appear in current state)",
       "DELETE FROM {load_table} WHERE operation = 'DELETE'"
     ]
@@ -373,6 +431,10 @@ def generate_load_model_sql(entity, attributes):
     # Alias OHNE Brackets - dbt-sqlserver escaped automatisch bei Bedarf
     # incremental_strategy='merge' sorgt dafür, dass pro BK nur 1 Zeile existiert
     # on_schema_change='sync_all_columns' erlaubt das Hinzufügen neuer Attribute nach Deployment
+    #
+    # deploy_commit_ids (optionale dbt --vars): wenn gesetzt, werden NUR diese Commits
+    # geladen und als 'loaded' markiert - sonst (Standard) alle approved Commits der Entity.
+    # Ermöglicht selektives Deploy einzelner Commits statt immer aller approved Commits.
     load_sql = f'''{{{{
   config(
     materialized='incremental',
@@ -384,9 +446,9 @@ def generate_load_model_sql(entity, attributes):
     as_columnstore=false,
     post_hook=[
       "-- Update staged_record status to 'loaded'",
-      "UPDATE sr SET sr.status = 'loaded' FROM mds_stage.staged_record sr INNER JOIN mds_stage.[commit] c ON sr.commit_id = c.id WHERE sr.entity_id = {entity_id} AND sr.status = 'committed' AND c.status = 'approved'",
+      "UPDATE sr SET sr.status = 'loaded' FROM mds_stage.staged_record sr INNER JOIN mds_stage.[commit] c ON sr.commit_id = c.id WHERE sr.entity_id = {entity_id} AND sr.status = 'committed' AND c.status = 'approved'{COMMIT_FILTER}",
       "-- Update commit status to 'loaded'",
-      "UPDATE mds_stage.[commit] SET status = 'loaded', deployed_at = GETUTCDATE() WHERE status = 'approved' AND entity_id = {entity_id}"
+      "UPDATE mds_stage.[commit] SET status = 'loaded', deployed_at = GETUTCDATE() WHERE status = 'approved' AND entity_id = {entity_id}{COMMIT_FILTER_PLAIN}"
     ]
   )
 }}}}
@@ -431,6 +493,7 @@ INNER JOIN mds_stage.[commit] c ON sr.commit_id = c.id
 WHERE sr.entity_id = {entity_id}
   AND sr.status = 'committed'
   AND c.status = 'approved'
+  {COMMIT_FILTER}
 
 {{% else %}}
 
@@ -619,7 +682,13 @@ def main():
                 continue
             
             print(f"  Attributes: {len(attributes)}")
-            
+
+            # Schema-Sync: fehlende Spalten in bestehenden Tabellen nachziehen,
+            # bevor dbt läuft (dbt-sqlserver's on_schema_change ist unzuverlässig)
+            if not args.dry_run:
+                ensure_columns(conn, 'mds_load', entity_code, attributes)
+                ensure_columns(conn, 'mds_master', entity_code, attributes)
+
             # Generate Load Model (JSON → flat table)
             if not args.views_only and not args.masters_only:
                 load_sql = generate_load_model_sql(entity, attributes)

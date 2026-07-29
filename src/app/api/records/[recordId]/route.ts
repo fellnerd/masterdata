@@ -93,9 +93,13 @@ export async function PUT(
     if (current.status === 'loaded') {
       updates.push('operation = \'UPDATE\'')
       updates.push('status = \'pending\'')
+      // Clear commit_id - the record needs to go through a NEW commit, since the
+      // old commit it's still pointing at is already approved/deployed. Without this,
+      // "commit pending records" (WHERE commit_id IS NULL) never picks it back up.
+      updates.push('commit_id = NULL')
       // Save current data as previous_data for potential reject rollback
       updates.push('previous_data = data')
-      logger.info({ recordId, previousStatus: current.status }, 
+      logger.info({ recordId, previousStatus: current.status },
         'Resetting deployed record to pending with UPDATE operation for SCD2')
     }
     

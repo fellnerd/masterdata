@@ -354,9 +354,9 @@ export default function ViewsPage() {
                   <Card 
                     key={view.id} 
                     elevation={0}
-                    style={{ 
-                      backgroundColor: view.is_deployed ? '#f0f8f0' : '#fff8e6',
-                      border: '1px solid #ddd'
+                    style={{
+                      backgroundColor: view.is_deployed ? 'var(--view-card-deployed-bg)' : 'var(--view-card-pending-bg)',
+                      border: '1px solid var(--view-card-border)'
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -373,19 +373,19 @@ export default function ViewsPage() {
                             <Tag intent="warning" icon="cloud-upload">Pending</Tag>
                           )}
                         </div>
-                        <code style={{ fontSize: '12px', color: '#666' }}>mds_view.{view.code}</code>
+                        <code style={{ fontSize: '12px', color: 'var(--view-card-text-muted)' }}>mds_view.{view.code}</code>
                         {view.description && (
-                          <p style={{ margin: '8px 0 0', color: '#666', fontSize: '14px' }}>
+                          <p style={{ margin: '8px 0 0', color: 'var(--view-card-text-muted)', fontSize: '14px' }}>
                             {view.description}
                           </p>
                         )}
                         {view.filter_condition && (
-                          <p style={{ margin: '4px 0 0', color: '#888', fontSize: '12px' }}>
+                          <p style={{ margin: '4px 0 0', color: 'var(--view-card-text-faint)', fontSize: '12px' }}>
                             Filter: <code>{view.filter_condition}</code>
                           </p>
                         )}
                         {view.last_deployed_at && (
-                          <p style={{ margin: '4px 0 0', color: '#888', fontSize: '12px' }}>
+                          <p style={{ margin: '4px 0 0', color: 'var(--view-card-text-faint)', fontSize: '12px' }}>
                             Zuletzt deployed: {formatDate(view.last_deployed_at)}
                           </p>
                         )}

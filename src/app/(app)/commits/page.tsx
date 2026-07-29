@@ -76,7 +76,7 @@ export default function CommitsPage() {
   
   // Deploy Dialog State
   const [deployDialogOpen, setDeployDialogOpen] = useState(false)
-  const [deployCommit, setDeployCommit] = useState<Commit | null>(null)
+  const [deployCommits, setDeployCommits] = useState<Commit[]>([])
   const [deployMode, setDeployMode] = useState<'load' | 'full'>('full')
   const [queueOnly, setQueueOnly] = useState(false)
   const [deploying, setDeploying] = useState(false)
@@ -168,9 +168,20 @@ export default function CommitsPage() {
     }
   }
 
-  // Open deploy dialog
+  // Open deploy dialog for a single commit
   const handleDeploy = (commit: Commit) => {
-    setDeployCommit(commit)
+    setDeployCommits([commit])
+    setDeployMode('full')
+    setDeployLogs([])
+    setDeployProgress(0)
+    setDeploying(false)
+    setActiveJobId(null)
+    setDeployDialogOpen(true)
+  }
+
+  // Open deploy dialog for all approved commits at once
+  const handleDeployAll = () => {
+    setDeployCommits(approvedCommits)
     setDeployMode('full')
     setDeployLogs([])
     setDeployProgress(0)
@@ -181,22 +192,26 @@ export default function CommitsPage() {
 
   // Execute deployment with SSE streaming
   const handleDeployConfirm = async (useQueueOnly = false) => {
-    if (!deployCommit) return
-    
+    if (deployCommits.length === 0) return
+
+    const commitLabel = deployCommits.length === 1
+      ? deployCommits[0].code
+      : `${deployCommits.length} commits`
+
     setDeploying(true)
     setDeployProgress(5)
-    
+
     if (useQueueOnly) {
       setDeployLogs([
         '📋 Füge Job zur Queue hinzu...',
         `📋 Modus: ${deployMode === 'full' ? 'Load + Master' : 'Nur Load'}`,
-        `📦 Commit: ${deployCommit.code}`
+        `📦 Commit(s): ${commitLabel}`
       ])
     } else {
       setDeployLogs([
         '🚀 Starte Data-Deployment...',
         `📋 Modus: ${deployMode === 'full' ? 'Load + Master' : 'Nur Load'}`,
-        `📦 Commit: ${deployCommit.code}`
+        `📦 Commit(s): ${commitLabel}`
       ])
     }
 
@@ -209,7 +224,7 @@ export default function CommitsPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          commit_ids: [deployCommit.id],
+          commit_ids: deployCommits.map(c => c.id),
           deploy_mode: deployMode,
           queue_only: useQueueOnly
         })
@@ -432,6 +447,11 @@ export default function CommitsPage() {
               <div style={{ marginBottom: 4 }}>
                 <span className="text-muted">Records:</span> {commit.record_count}
               </div>
+              {commit.description && (
+                <div style={{ marginBottom: 4 }}>
+                  <span className="text-muted">Message:</span> {commit.description}
+                </div>
+              )}
               <div style={{ marginBottom: 4 }}>
                 <span className="text-muted">Created:</span> {formatDate(commit.created_at)} by {commit.created_by}
               </div>
@@ -561,6 +581,14 @@ export default function CommitsPage() {
       {/* Tabs */}
       <div className="section-header">
         <h2>Commit Queue</h2>
+        <Button
+          intent="success"
+          icon="cloud-upload"
+          disabled={approvedCommits.length === 0}
+          onClick={handleDeployAll}
+        >
+          Alle deployen ({approvedCommits.length})
+        </Button>
       </div>
 
       <Tabs 
@@ -657,11 +685,19 @@ export default function CommitsPage() {
           {!deploying ? (
             <>
               {/* Commit Info */}
-              {deployCommit && (
+              {deployCommits.length === 1 && (
                 <Callout intent="none" icon="info-sign" style={{ marginBottom: 16 }}>
-                  <strong>{deployCommit.entity_name}</strong>: {deployCommit.record_count} Datensätze
+                  <strong>{deployCommits[0].entity_name}</strong>: {deployCommits[0].record_count} Datensätze
                   <div style={{ marginTop: 4, color: 'var(--gray3)' }}>
-                    Commit: <code>{deployCommit.code}</code>
+                    Commit: <code>{deployCommits[0].code}</code>
+                  </div>
+                </Callout>
+              )}
+              {deployCommits.length > 1 && (
+                <Callout intent="none" icon="info-sign" style={{ marginBottom: 16 }}>
+                  <strong>{deployCommits.length} Commits</strong>: {deployCommits.reduce((sum, c) => sum + c.record_count, 0)} Datensätze insgesamt
+                  <div style={{ marginTop: 4, color: 'var(--gray3)' }}>
+                    {deployCommits.map(c => <code key={c.id} style={{ marginRight: 6 }}>{c.code}</code>)}
                   </div>
                 </Callout>
               )}

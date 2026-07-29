@@ -22,6 +22,13 @@
   --font-size-base: 12px;
   --font-size-small: 11px;
   --font-size-title: 14px;
+
+  --card-bg-secondary: #f5f8fa;
+  --view-card-deployed-bg: #f0f8f0;
+  --view-card-pending-bg: #fff8e6;
+  --view-card-text-muted: #666;
+  --view-card-text-faint: #888;
+  --view-card-border: #ddd;
 }
 
 // Reset
@@ -154,6 +161,13 @@ body.bp5-dark {
 // Dark Mode Text Fix - Comprehensive
 .bp5-dark {
   color: #f5f8fa;
+
+  --card-bg-secondary: #1c2127;
+  --view-card-deployed-bg: rgba(15, 153, 96, 0.15);
+  --view-card-pending-bg: rgba(217, 130, 43, 0.18);
+  --view-card-text-muted: #a7b6c2;
+  --view-card-text-faint: #8a9ba8;
+  --view-card-border: #404854;
   
   // Global text inheritance
   h1, h2, h3, h4, h5, h6, p, span, div, td, th, label {

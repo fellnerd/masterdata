@@ -206,7 +206,13 @@ async function handleDeploy(job: Job<MdsJobData>): Promise<void> {
     '--select', loadModels.join(' '),
     '--target', process.env.DBT_TARGET || 'local'
   ];
-  
+
+  // Scope this run to the specific commits that were selected for deploy,
+  // instead of picking up every approved commit for the entity.
+  if (commitIds && commitIds.length > 0) {
+    loadArgs.push('--vars', JSON.stringify({ deploy_commit_ids: commitIds }));
+  }
+
   await executeDbtCommand(job, loadArgs);
   
   let finalStatus = 'loaded';
@@ -222,7 +228,11 @@ async function handleDeploy(job: Job<MdsJobData>): Promise<void> {
       '--select', masterModels.join(' '),
       '--target', process.env.DBT_TARGET || 'local'
     ];
-    
+
+    if (commitIds && commitIds.length > 0) {
+      masterArgs.push('--vars', JSON.stringify({ deploy_commit_ids: commitIds }));
+    }
+
     await executeDbtCommand(job, masterArgs);
     finalStatus = 'deployed';
   } else {
