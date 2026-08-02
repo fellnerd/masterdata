@@ -222,6 +222,46 @@ npm run lint
 npm run build
 ```
 
+## ☁️ Azure Deployment
+
+Läuft produktiv auf **`vm-services-001`** (Azure VM, West Europe, `Standard_B2ls_v2`), die selbe VM, auf der auch n8n für die PPMC Data & BI Plattform läuft — Details zur Gesamt-Infrastruktur (VNet-Peering, NSG, Key Vault) siehe [ppmc-datavault-dbt Skill `azure-vm-services`](https://github.com/ppmc-analytics-ag/ppmc-datavault-dbt) (nicht in diesem Repo).
+
+### Erreichbarkeit
+
+- **App**: https://masterdata-ppmc.westeurope.cloudapp.azure.com
+- TLS via **Caddy** (Reverse Proxy, automatisches Let's-Encrypt-Zertifikat), Caddy leitet `masterdata-ppmc.westeurope.cloudapp.azure.com` → `localhost:3010` (Host-Port von `mds-app`, siehe `docker-compose.yml`)
+- Eigene statische Public IP (getrennt von der n8n-IP auf derselben VM) mit eigenem Azure-DNS-Label, als sekundäre IP-Konfiguration auf der VM-NIC eingerichtet — **wichtig**: eine neu hinzugefügte sekundäre Azure-NIC-IP wird vom Ubuntu-Netzwerkstack nicht automatisch per DHCP übernommen, sie muss per Netplan-Drop-in (`/etc/netplan/60-secondary-ip.yaml`) statisch gesetzt werden, sonst schlägt die ACME-Challenge mit "Timeout during connect" fehl.
+
+### Deployment-Verzeichnis
+
+Persistenter Checkout unter `/opt/masterdata` auf der VM (nicht der CI-Workspace) — `.env` liegt nur dort, wird von Git nicht angefasst.
+
+### Datenbank & Auth
+
+- `DB_SERVER=ppmcag-datavault.database.windows.net`, `DB_NAME=datavault-dev` — SQL-Auth mit dem bestehenden `sqladmin`-Login (Secondary SQL Admin Login des Data-Vault-Projekts, kein dedizierter `mds_app`-Login nötig)
+- Microsoft Entra ID App Registration `masterdata` (Client-ID `a8992868-d0df-4916-8c56-5ae085242ead`) — Redirect-URI für diese Umgebung ist unter "Web → Redirect URIs" ergänzt, zusätzlich zur bestehenden `mds-ppmcag.released.services`-URI (Plesk-Deployment) und `localhost:3000` (lokale Entwicklung)
+- Redis: **selbst gehostet** (`docker-compose.redis.yml`), kein Upstash
+
+### CI/CD
+
+GitHub Actions Workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml): bei jedem Push auf `main` läuft ein **Clean Restart** auf einem Self-Hosted-Runner (registriert auf `vm-services-001`, Labels `self-hosted, linux, masterdata`):
+
+1. `git fetch` + `git reset --hard origin/main` im Deployment-Verzeichnis `/opt/masterdata`
+2. `docker compose down` + `docker compose up -d --build` (App + Worker + Redis)
+3. Health-Check gegen `/api/health` (bis zu 150s Retry), bei Fehlschlag Logs der letzten 100 Zeilen im Workflow-Output
+
+Der Runner ist ausschließlich für dieses Repo registriert (separate Instanz/Service von einem evtl. zweiten Runner auf derselben VM für andere Repos — Self-Hosted-Runner sind immer an genau ein Repo oder eine Org gebunden, nicht mehrfach nutzbar).
+
+### Manuelles Redeploy
+
+```bash
+ssh azureuser@<VM-Public-IP>
+cd /opt/masterdata
+git pull
+docker compose -f docker-compose.yml -f docker-compose.redis.yml down
+docker compose -f docker-compose.yml -f docker-compose.redis.yml up -d --build
+```
+
 ## 📝 License
 
 MIT
