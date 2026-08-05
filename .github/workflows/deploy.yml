@@ -19,6 +19,7 @@ jobs:
       - name: Clean restart (down + build + up)
         run: |
           cd /opt/masterdata
+          export GIT_SHA=$(git rev-parse --short HEAD)
           docker compose -f docker-compose.yml -f docker-compose.redis.yml down
           docker compose -f docker-compose.yml -f docker-compose.redis.yml up -d --build
 

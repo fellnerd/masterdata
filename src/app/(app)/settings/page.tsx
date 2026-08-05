@@ -3,6 +3,11 @@
 import { Card, Icon, IconName } from '@blueprintjs/core'
 import { useRouter } from 'next/navigation'
 import { Header } from '@/components/layout/Header'
+import packageJson from '../../../../package.json'
+
+// NEXT_PUBLIC_* vars are inlined into the client bundle at build time (see
+// Dockerfile's GIT_SHA build arg), so this is safe to read directly here.
+const buildSha = process.env.NEXT_PUBLIC_BUILD_SHA || 'dev'
 
 interface SettingsSection {
   title: string
@@ -98,6 +103,10 @@ export default function SettingsPage() {
               </div>
             </Card>
           ))}
+        </div>
+
+        <div className="text-muted" style={{ marginTop: 32, fontSize: 12, textAlign: 'center' }}>
+          Master Data Services v{packageJson.version} · {buildSha}
         </div>
       </div>
     </>

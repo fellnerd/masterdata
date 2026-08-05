@@ -53,8 +53,12 @@ export const authConfig: NextAuthConfig = {
 
       // Public routes. Note: /api/v1 is "public" only in the sense that NextAuth's
       // session cookie isn't required here - each /api/v1 route enforces its own
-      // Bearer API-token check internally (see src/lib/apiToken.ts).
-      const publicRoutes = ['/login', '/api/auth', '/api/models', '/api/entities', '/api/attributes', '/api/records', '/api/commits', '/api/health', '/api/v1'];
+      // Bearer API-token check internally (see src/lib/apiToken.ts). The
+      // internal /api/models, /api/entities, /api/attributes, /api/records and
+      // /api/commits routes have no auth check of their own, so they must NOT
+      // be listed here - they need the session gate below like every other
+      // internal route, matching the pages that call them.
+      const publicRoutes = ['/login', '/api/auth', '/api/health', '/api/v1'];
       if (publicRoutes.some(route => pathname.startsWith(route))) {
         return true;
       }

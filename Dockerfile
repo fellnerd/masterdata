@@ -13,6 +13,12 @@ RUN npm ci --legacy-peer-deps
 # Copy source code
 COPY . .
 
+# Git commit the CI workflow built, for display in the UI (Settings) so a
+# deploy can be visually confirmed. NEXT_PUBLIC_* vars are inlined at build
+# time, so this must be set before `next build`, not just at runtime.
+ARG GIT_SHA=unknown
+ENV NEXT_PUBLIC_BUILD_SHA=$GIT_SHA
+
 # Build the application
 RUN npm run build
 
