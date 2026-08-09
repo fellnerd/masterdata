@@ -119,15 +119,25 @@ export async function POST(request: NextRequest) {
     )
 
     let business_key = providedBusinessKey
-    if (!business_key && bkAttribute.length > 0) {
+    if (business_key === undefined && bkAttribute.length > 0) {
       business_key = data[bkAttribute[0].code]
     }
-    if (!business_key) {
+    // Falsy-but-valid values (0, false) must not be treated as "missing" -
+    // check explicitly for absence instead of `!business_key`.
+    if (business_key === undefined || business_key === null || business_key === '') {
       return NextResponse.json(
         { error: 'business_key is required (either directly or in data with a business key attribute)' },
         { status: 400 }
       )
     }
+    // HASHBYTES() only accepts char/varchar/binary types. mssql infers the
+    // SQL parameter type from the JS value's type with no explicit typing
+    // here (see db-server.ts), so a business key derived from a numeric
+    // attribute (e.g. an integer business key) would otherwise be bound as
+    // `int` and fail with "Argument data type int is invalid for argument 2
+    // of hashbytes function." String-typed business keys never hit this,
+    // which is why the bug only shows up for numeric business-key attributes.
+    business_key = String(business_key)
 
     const dataJson = JSON.stringify(data)
 

@@ -100,7 +100,13 @@ export async function PUT(
       )
       if (attributes.length > 0) {
         const newBusinessKey = data[attributes[0].code]
-        if (newBusinessKey && newBusinessKey !== current.business_key) {
+        // Falsy-but-valid values (0, false) must not be treated as "no
+        // change" - check explicitly for absence instead of `newBusinessKey && ...`.
+        if (
+          newBusinessKey !== undefined &&
+          newBusinessKey !== null &&
+          String(newBusinessKey) !== current.business_key
+        ) {
           updates.push('business_key = @businessKey')
           updates.push("business_key_hash = CONVERT(CHAR(64), HASHBYTES('SHA2_256', @businessKey), 2)")
           queryParams.businessKey = String(newBusinessKey)
