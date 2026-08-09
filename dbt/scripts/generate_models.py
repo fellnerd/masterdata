@@ -235,6 +235,15 @@ def generate_model_sql(entity, attributes):
     # Load table: mds_load.<entity_code> (ohne load_ prefix)
     load_table = f"mds_load.{escaped_entity}"
     master_table = f"mds_master.{escaped_entity}"
+    # dbt ref() to the load model (NOT load_table, which is a raw schema.table
+    # string) - this is what actually registers the load->master dependency
+    # in dbt's DAG. Without it, dbt has no way to know this model must run
+    # after load_<entity>, so with concurrency > 1 it can (and, seen in
+    # production, does) start the master SELECT before load's own INSERT has
+    # committed, silently processing 0 rows instead of erroring. The model
+    # name always matches write_load_file()'s filename convention
+    # (load_<entity_code>.sql, plain entity_code, never bracket-escaped).
+    load_model_ref = f"{{{{ ref('load_{entity_code}') }}}}"
     
     # Business Key finden
     business_key = None
@@ -335,7 +344,7 @@ WITH source_data AS (
         source_system,
         source_id,
         created_at
-    FROM {load_table}
+    FROM {load_model_ref}
     WHERE is_processed = 0
 ),
 
@@ -397,12 +406,12 @@ SELECT
     'dbt' AS created_by,
     CAST(NULL AS DATETIME2) AS updated_at,
     CAST(NULL AS NVARCHAR(100)) AS updated_by
-FROM {load_table}
+FROM {load_model_ref}
 WHERE is_processed = 0
 
 {{% endif %}}
 '''
-    
+
     return model_sql
 
 

@@ -66,5 +66,13 @@ ENV WORKER_CONCURRENCY=2
 # into the image (MDS_DB_SERVER/DATABASE/USER/PASSWORD)
 ENV DBT_PROFILES_DIR=/app/dbt
 
-# Run the worker
-CMD ["tsx", "src/lib/queue/worker.ts"]
+# Regenerate dbt load/master/view models for every active entity before
+# starting (idempotent, from mds_meta - the source of truth). These files
+# are only ever written to this container's own filesystem by
+# generate_models.py, never committed to git or persisted in a volume, so a
+# fresh container from a redeploy would otherwise be missing the models for
+# any entity that isn't currently being (re-)deployed through the UI -
+# dbt then either errors on a missing ref() or, worse, silently processes
+# 0 rows. Output stays visible in `docker logs`; `|| true` only keeps a
+# regeneration failure from blocking worker startup entirely.
+CMD ["sh", "-c", "cd /app/dbt && python3 scripts/generate_models.py || true && cd /app && tsx src/lib/queue/worker.ts"]
