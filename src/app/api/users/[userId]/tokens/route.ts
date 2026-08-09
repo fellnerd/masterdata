@@ -19,9 +19,9 @@ interface ApiTokenRow {
 // Scopes are derived from the user's role - keeps token issuance simple
 // (no separate scope-picker UI) while matching the CRUD/RO split:
 // stage gets full CRUD for editor/approver/admin, read-only for viewer;
-// master and views are always read-only for everyone.
+// master, views and entities (metadata) are always read-only for everyone.
 function scopesForRoles(roles: string[]): string[] {
-  const scopes = new Set(['master:read', 'views:read'])
+  const scopes = new Set(['master:read', 'views:read', 'entities:read'])
   if (roles.some(r => ['editor', 'approver', 'admin'].includes(r))) {
     scopes.add('stage:read')
     scopes.add('stage:write')

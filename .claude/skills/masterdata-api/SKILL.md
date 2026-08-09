@@ -1,6 +1,6 @@
 ---
 name: masterdata-api
-description: Read and write data on a running Master Data Services (MDS) instance via its token-authenticated REST API (/api/v1/*) - list/create/edit/delete staged records, and read (read-only) deployed master data and views. Use whenever the user wants to interact with data on a masterdata deployment programmatically instead of through the web UI.
+description: Read and write data on a running Master Data Services (MDS) instance via its token-authenticated REST API (/api/v1/*) - discover models/entities/attributes, list/create/edit/delete staged records, and read (read-only) deployed master data and views. Use whenever the user wants to interact with data on a masterdata deployment programmatically instead of through the web UI.
 ---
 
 # masterdata REST API
@@ -42,10 +42,13 @@ of this API. After staging changes via this skill, a human with UI access
 still has to review, commit, and deploy them. Say this explicitly if the
 user expects an end-to-end automated write path - it doesn't exist yet.
 
-**Can't:** discover entities/attributes/models by API (`/api/entities` etc.
-are internal, session-only routes, not part of `/api/v1`). To stage a
-record you need to already know the numeric `entity_id` and its attribute
-codes - ask the user, or have them look it up in the UI under Models/Entities.
+**Can:** discover models, entities and their attributes by API
+(`/api/v1/models`, `/api/v1/entities`) - use these to find the `entity_id`
+and attribute codes needed for `POST /api/v1/stage/records`, rather than
+asking the user or guessing.
+
+Tokens issued before this scope existed won't have `entities:read` - if you
+get a 403 here, tell the user to reissue the token from Settings.
 
 ## Scopes
 
@@ -58,6 +61,7 @@ user's role at creation time (not something you can request per-call):
 | `stage:write` | editor, approver, admin (not viewer) | `POST`/`PUT`/`DELETE` on `/api/v1/stage/records*` |
 | `master:read` | everyone | `GET` on `/api/v1/master*` |
 | `views:read` | everyone | `GET` on `/api/v1/views*` |
+| `entities:read` | everyone | `GET` on `/api/v1/models`, `/api/v1/entities` |
 
 A 403 with `"Token is missing required scope: ..."` means the issuing
 user's role doesn't allow that action - a different user needs to issue the
@@ -68,6 +72,13 @@ token, not something fixable client-side.
 All list endpoints are paginated: `?page=1&pageSize=50` (`pageSize` capped
 at 200 server-side), response includes `{ data, total, page, pageSize,
 totalPages }`.
+
+### Metadata (read-only)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/models` | Lists all data models, with `entity_count` per model |
+| GET | `/api/v1/entities` | Filter with `?model_id=` or `?model_code=`. Each entity includes an embedded `attributes` array (`code`, `name`, `data_type`, `max_length`, `is_required`, `is_business_key`) - this is how you find what to put in `data` when staging a record. |
 
 ### Staging (full CRUD)
 
@@ -106,13 +117,14 @@ POST body fields:
 BASE="https://your-instance.example.com"
 TOKEN="mds_..."
 
-# 1. See what master data exists
-curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/master" | jq
+# 1. Find the entity you want to stage a record for, and its attribute codes
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/entities?model_code=CUSTOMER" | jq
 
-# 2. Read current master data for one entity
+# 2. See what master data already exists
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/master" | jq
 curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/master/customer?pageSize=20" | jq
 
-# 3. Stage a new record (needs stage:write)
+# 3. Stage a new record (needs stage:write; entity_id and attribute codes from step 1)
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"entity_id": 4, "data": {"code": "ACME", "name": "Acme Corp"}}' \
   "$BASE/api/v1/stage/records" | jq

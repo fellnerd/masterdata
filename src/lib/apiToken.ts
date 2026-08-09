@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { createHash } from 'crypto'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 
-export type ApiScope = 'stage:read' | 'stage:write' | 'master:read' | 'views:read'
+export type ApiScope = 'stage:read' | 'stage:write' | 'master:read' | 'views:read' | 'entities:read'
 
 interface ApiTokenLookup {
   id: number

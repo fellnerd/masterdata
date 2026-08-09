@@ -5,6 +5,24 @@ import { dbQuery, dbExecute } from '@/lib/db-server'
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// Entities created while their model was still 'draft' never get a
+// schema_deployment row (see upsertSchemaDeployment in api/entities/route.ts,
+// which only fires when the model is already 'active' at entity-creation
+// time). When the model later becomes active, sweep up anything that was
+// skipped - otherwise those entities stay stuck: status 'draft' in the UI,
+// but invisible on /deploy's schema tab forever, since nothing ever
+// retries the upsert for them.
+async function backfillSchemaDeploymentForModel(modelId: number) {
+  await dbExecute(
+    `INSERT INTO mds_meta.schema_deployment (entity_id, status, created_at)
+     SELECT e.id, 'pending', GETUTCDATE()
+     FROM mds_meta.entity e
+     WHERE e.model_id = @modelId
+       AND NOT EXISTS (SELECT 1 FROM mds_meta.schema_deployment sd WHERE sd.entity_id = e.id)`,
+    { modelId }
+  )
+}
+
 interface Model {
   id: number
   code: string
@@ -105,8 +123,13 @@ export async function PUT(
       queryParams
     )
 
-    // Note: Status cascade to entities removed - entity status is now controlled via schema deployment
-    
+    // Note: Status cascade to entities removed - entity status is now controlled via schema deployment.
+    // Still needed: sweep up entities that were created while this model was
+    // draft (see backfillSchemaDeploymentForModel above).
+    if (status === 'active') {
+      await backfillSchemaDeploymentForModel(parseInt(modelId))
+    }
+
     return NextResponse.json({
       model_id: modelId,
       updated_at: new Date().toISOString(),
