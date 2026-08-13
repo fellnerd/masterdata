@@ -10,6 +10,7 @@ interface ImportMapping {
   import_column_mapping: Record<string, string> | null
   import_filter: string | null
   import_schedule: string | null
+  import_tracking_column: string | null
   last_import_at: string | null
 }
 
@@ -23,13 +24,14 @@ export async function GET(
   
   try {
     const results = await dbQuery<ImportMapping>(
-      `SELECT 
+      `SELECT
          import_source_object,
          import_column_mapping,
          import_filter,
          import_schedule,
+         import_tracking_column,
          last_import_at
-       FROM mds_meta.entity 
+       FROM mds_meta.entity
        WHERE id = @id`,
       { id: parseInt(entityId) }
     )
@@ -82,7 +84,8 @@ export async function PUT(
       import_source_object,
       import_column_mapping,
       import_filter,
-      import_schedule
+      import_schedule,
+      import_tracking_column
     } = body
     
     // Verify entity exists
@@ -105,12 +108,13 @@ export async function PUT(
     
     // Update import configuration
     await dbExecute(
-      `UPDATE mds_meta.entity 
-       SET 
+      `UPDATE mds_meta.entity
+       SET
          import_source_object = @import_source_object,
          import_column_mapping = @import_column_mapping,
          import_filter = @import_filter,
          import_schedule = @import_schedule,
+         import_tracking_column = @import_tracking_column,
          updated_at = GETUTCDATE()
        WHERE id = @id`,
       {
@@ -118,7 +122,8 @@ export async function PUT(
         import_source_object: import_source_object || null,
         import_column_mapping: columnMappingJson,
         import_filter: import_filter || null,
-        import_schedule: import_schedule || null
+        import_schedule: import_schedule || null,
+        import_tracking_column: import_tracking_column || null
       }
     )
     

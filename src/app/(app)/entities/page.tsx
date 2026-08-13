@@ -38,6 +38,7 @@ interface Entity {
   import_column_mapping?: Record<string, string> | null
   import_filter?: string | null
   import_schedule?: string | null
+  import_tracking_column?: string | null
   last_import_at?: string | null
 }
 
@@ -107,7 +108,8 @@ function EntitiesPageInner() {
     source_object: '',
     column_mapping: {} as Record<string, string>,
     filter: '',
-    schedule: ''
+    schedule: '',
+    tracking_column: ''
   })
   const [isSavingImport, setIsSavingImport] = useState(false)
   const [isImportSourceConnected, setIsImportSourceConnected] = useState(false)
@@ -279,7 +281,8 @@ function EntitiesPageInner() {
         source_object: entity.import_source_object || '',
         column_mapping: entity.import_column_mapping || {},
         filter: entity.import_filter || '',
-        schedule: entity.import_schedule || ''
+        schedule: entity.import_schedule || '',
+        tracking_column: entity.import_tracking_column || ''
       })
     } catch (err) {
       console.error('Failed to load import data:', err)
@@ -300,7 +303,8 @@ function EntitiesPageInner() {
             ? importConfig.column_mapping 
             : null,
           import_filter: importConfig.filter || null,
-          import_schedule: importConfig.schedule || null
+          import_schedule: importConfig.schedule || null,
+          import_tracking_column: importConfig.tracking_column || null
         })
       })
       
@@ -767,8 +771,25 @@ function EntitiesPageInner() {
                     />
                   </FormGroup>
 
-                  <FormGroup 
-                    label="Schedule (Cron)" 
+                  <FormGroup
+                    label="Tracking Column"
+                    labelFor="import-tracking-column"
+                    helperText={'Optional. If set (e.g. a Satellite\'s "hashdiff"), re-imports only touch rows whose tracking value actually changed - manually enriched fields on unchanged rows are preserved. Left empty: every import fully replaces this entity\'s staged records.'}
+                  >
+                    <HTMLSelect
+                      id="import-tracking-column"
+                      fill
+                      value={importConfig.tracking_column}
+                      onChange={(e) => setImportConfig(prev => ({ ...prev, tracking_column: e.target.value }))}
+                      options={[
+                        { value: '', label: '-- None (full refresh on every import) --' },
+                        ...getSelectedObjectColumns().map(col => ({ value: col, label: col }))
+                      ]}
+                    />
+                  </FormGroup>
+
+                  <FormGroup
+                    label="Schedule (Cron)"
                     labelFor="import-schedule"
                     helperText="Optional cron expression for automatic import (e.g., 0 2 * * * for daily at 2 AM)"
                   >

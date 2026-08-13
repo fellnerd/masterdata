@@ -89,6 +89,7 @@ export async function GET(request: NextRequest) {
         e.import_column_mapping,
         e.import_filter,
         e.import_schedule,
+        e.import_tracking_column,
         e.last_import_at,
         e.created_at,
         e.created_by,

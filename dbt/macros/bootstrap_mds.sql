@@ -71,6 +71,15 @@ CREATE TABLE mds_meta.entity (
     CONSTRAINT FK__entity__model_id FOREIGN KEY (model_id) REFERENCES mds_meta.model(id),
     CONSTRAINT UQ__entity__model_code UNIQUE (model_id, code)
 );
+
+-- Optional change-detection column for imports (e.g. a Satellite's hashdiff,
+-- or any other column). Left NULL: import stays full delete+reinsert, as
+-- before. Set: import switches to skip-unchanged/merge-changed per business
+-- key instead - see import_from_datavault.sql.
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('mds_meta.entity') AND name = 'import_tracking_column')
+BEGIN
+    ALTER TABLE mds_meta.entity ADD import_tracking_column NVARCHAR(255) NULL;
+END
 {% endset %}
 
 {% set attribute_sql %}
@@ -159,6 +168,12 @@ CREATE TABLE mds_stage.staged_record (
     CONSTRAINT FK__staged_record__entity_id FOREIGN KEY (entity_id) REFERENCES mds_meta.entity(id)
 );
 
+-- Tracking-column value seen at this row's last import, for change
+-- detection when entity.import_tracking_column is set.
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('mds_stage.staged_record') AND name = 'source_tracking_value')
+BEGIN
+    ALTER TABLE mds_stage.staged_record ADD source_tracking_value NVARCHAR(500) NULL;
+END
 {% endset %}
 
 {% set commit_sql %}
