@@ -190,22 +190,76 @@ export async function DELETE(
       'SELECT COUNT(*) as count FROM mds_stage.staged_record WHERE entity_id = @id',
       { id: parseInt(entityId) }
     )
-    
+
     if (records[0].count > 0) {
       return NextResponse.json(
         { error: 'Cannot delete entity with staged records. Delete or commit records first.' },
         { status: 400 }
       )
     }
-    
+
+    // Every table below has a foreign key on entity_id/reference_entity_id;
+    // an entity with any deployment/commit history can never actually be
+    // deleted (and generally shouldn't be, since that would orphan the
+    // SCD2 master lineage) - give a specific reason instead of letting the
+    // raw FK violation surface as an unhandled 500.
+    const [commits, deployments, schemaDeployments, views, referencedBy] = await Promise.all([
+      dbQuery<{ count: number }>('SELECT COUNT(*) as count FROM mds_stage.[commit] WHERE entity_id = @id', { id: parseInt(entityId) }),
+      dbQuery<{ count: number }>('SELECT COUNT(*) as count FROM mds_load.deployment_log WHERE entity_id = @id', { id: parseInt(entityId) }),
+      dbQuery<{ count: number }>('SELECT COUNT(*) as count FROM mds_meta.schema_deployment WHERE entity_id = @id', { id: parseInt(entityId) }),
+      dbQuery<{ count: number }>('SELECT COUNT(*) as count FROM mds_meta.entity_view WHERE entity_id = @id', { id: parseInt(entityId) }),
+      dbQuery<{ count: number }>('SELECT COUNT(*) as count FROM mds_meta.attribute WHERE reference_entity_id = @id', { id: parseInt(entityId) }),
+    ])
+
+    if (commits[0].count > 0) {
+      return NextResponse.json(
+        { error: `Cannot delete entity with ${commits[0].count} commit(s) in its history.` },
+        { status: 400 }
+      )
+    }
+    if (deployments[0].count > 0) {
+      return NextResponse.json(
+        { error: `Cannot delete entity with ${deployments[0].count} deployment log entr(y/ies).` },
+        { status: 400 }
+      )
+    }
+    if (schemaDeployments[0].count > 0) {
+      return NextResponse.json(
+        { error: 'Cannot delete entity with a schema deployment record. Reset or remove it under Deploy first.' },
+        { status: 400 }
+      )
+    }
+    if (views[0].count > 0) {
+      return NextResponse.json(
+        { error: `Cannot delete entity with ${views[0].count} view(s) defined on it. Delete the view(s) first.` },
+        { status: 400 }
+      )
+    }
+    if (referencedBy[0].count > 0) {
+      return NextResponse.json(
+        { error: `Cannot delete entity: ${referencedBy[0].count} attribute(s) on other entities reference it.` },
+        { status: 400 }
+      )
+    }
+
     await dbExecute(
       'DELETE FROM mds_meta.entity WHERE id = @id',
       { id: parseInt(entityId) }
     )
-    
+
     return NextResponse.json({ success: true })
   } catch (error) {
     logger.error({ error, entityId }, 'Failed to delete entity')
+    // Safety net for any FK constraint not covered by the checks above
+    // (e.g. a future table added with a reference to entity.id) - still
+    // report a clear 400 instead of crashing with a raw 500.
+    const isFkViolation = error instanceof Error && 'number' in error && (error as { number?: number }).number === 547
+    if (isFkViolation) {
+      return NextResponse.json(
+        { error: 'Cannot delete entity: other records still reference it.' },
+        { status: 400 }
+      )
+    }
     return NextResponse.json(
       { error: 'Failed to delete entity' },
       { status: 500 }

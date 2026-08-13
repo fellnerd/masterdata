@@ -164,15 +164,34 @@ export async function DELETE(
         { status: 400 }
       )
     }
-    
+
+    const roleAssignments = await dbQuery<{ count: number }>(
+      'SELECT COUNT(*) as count FROM mds_meta.user_role WHERE model_id = @id',
+      { id: parseInt(modelId) }
+    )
+    if (roleAssignments[0].count > 0) {
+      return NextResponse.json(
+        { error: `Cannot delete model: ${roleAssignments[0].count} user role assignment(s) scoped to it. Remove those first.` },
+        { status: 400 }
+      )
+    }
+
     await dbExecute(
       'DELETE FROM mds_meta.model WHERE id = @id',
       { id: parseInt(modelId) }
     )
-    
+
     return NextResponse.json({ success: true })
   } catch (error) {
     logger.error({ error, modelId }, 'Failed to delete model')
+    // Safety net for any FK constraint not covered by the checks above.
+    const isFkViolation = error instanceof Error && 'number' in error && (error as { number?: number }).number === 547
+    if (isFkViolation) {
+      return NextResponse.json(
+        { error: 'Cannot delete model: other records still reference it.' },
+        { status: 400 }
+      )
+    }
     return NextResponse.json(
       { error: 'Failed to delete model' },
       { status: 500 }

@@ -113,12 +113,12 @@ function inferModelType(filePath: string, fileName: string): DbtModel['type'] {
  */
 function extractColumnsFromSql(sqlContent: string): string[] {
   const columns: string[] = []
-  
+
   // Try to find columns in the final SELECT statement or CTE
   // Pattern: looks for column names in SELECT ... FROM patterns
   const selectPattern = /SELECT\s+([\s\S]*?)\s+FROM/gi
   const matches = sqlContent.matchAll(selectPattern)
-  
+
   for (const match of matches) {
     const selectClause = match[1]
     // Extract column names (simplified - handles common patterns)
@@ -130,7 +130,7 @@ function extractColumnsFromSql(sqlContent: string): string[] {
       }
     }
   }
-  
+
   // Also look for explicit column definitions in Jinja macros
   const jinjaColPattern = /['"](\w+)['"]\s*:/g
   const jinjaMatches = sqlContent.matchAll(jinjaColPattern)
@@ -140,8 +140,59 @@ function extractColumnsFromSql(sqlContent: string): string[] {
       columns.push(colName)
     }
   }
-  
+
+  // automate_dv (Data Vault) models are typically a single macro call with
+  // no SELECT/FROM at all, and this project's convention embeds the source
+  // column list as a YAML block inside a Jinja {% set %}/{% endset %},
+  // then passes it to the macro via fromyaml()/metadata_dict[...] - e.g.:
+  //
+  //   {%- set yaml_metadata -%}
+  //   src_pk: "hk_werk"
+  //   src_hashdiff:
+  //     source_column: "hd_werk"
+  //     alias: "hashdiff"
+  //   src_payload:
+  //     - "NAME"
+  //     - "KUERZEL"
+  //   {%- endset -%}
+  //   {% set metadata_dict = fromyaml(yaml_metadata) %}
+  //   {{ automate_dv.sat(src_pk=metadata_dict["src_pk"], ...) }}
+  //
+  // Neither of the extraction patterns above can see any of this (no
+  // SELECT, and no literal `key="value"` at the macro call site itself -
+  // the values only exist inside the YAML block), so hub/sat/link models
+  // built this way always resolved to an empty column list. Find each such
+  // block and parse it as actual YAML instead of guessing with more regex,
+  // then take every string value in it (source_model is the only non-column
+  // string these blocks conventionally carry, so it's excluded explicitly).
+  const setBlockPattern = /\{%-?\s*set\s+\w+\s*-?%\}([\s\S]*?)\{%-?\s*endset\s*-?%\}/g
+  for (const match of sqlContent.matchAll(setBlockPattern)) {
+    let parsed: unknown
+    try {
+      parsed = yaml.load(match[1])
+    } catch {
+      continue
+    }
+    collectYamlStringValues(parsed, columns)
+  }
+
   return columns
+}
+
+// Recursively collects every string leaf value from a parsed YAML metadata
+// block (see extractColumnsFromSql) - covers plain `key: "col"`, list items
+// under `key: [...]`, and nested `key: { source_column: "...", alias: "..." }`.
+function collectYamlStringValues(value: unknown, into: string[], key?: string): void {
+  if (key === 'source_model') return
+  if (typeof value === 'string') {
+    if (value && !into.includes(value)) into.push(value)
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectYamlStringValues(item, into)
+  } else if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      collectYamlStringValues(v, into, k)
+    }
+  }
 }
 
 /**

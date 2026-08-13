@@ -383,17 +383,17 @@ export default function ModelsPage() {
                 </div>
 
                 <div className="card-footer" style={{ display: 'flex', gap: 6, paddingTop: 10 }}>
-                  <Button 
-                    small 
-                    icon="th" 
-                    text="Entities" 
-                    onClick={() => router.push('/entities')}
+                  <Button
+                    small
+                    icon="th"
+                    text="Entities"
+                    onClick={() => router.push(`/entities?model=${model.code}`)}
                   />
-                  <Button 
-                    small 
-                    icon="database" 
-                    text="Data" 
-                    onClick={() => router.push('/data')}
+                  <Button
+                    small
+                    icon="database"
+                    text="Data"
+                    onClick={() => router.push(`/data?model=${model.code}`)}
                   />
                   {model.status === 'active' && (
                     <Button small icon="play" intent="success" text="Deploy" onClick={() => router.push('/deploy')} />

@@ -20,10 +20,11 @@ import {
   Icon,
   type IconName,
 } from '@blueprintjs/core';
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import { PageLayout } from '@/components/layout/PageLayout';
 import { KpiCard, KpiGrid } from '@/components/ui/KpiCard';
 import { SectionHeader } from '@/components/ui/SectionHeader';
+import { useFilterPersistence } from '@/hooks/useFilterPersistence';
 
 interface Attribute {
   id: number;
@@ -66,13 +67,25 @@ interface Summary {
 }
 
 export default function AttributesPage() {
+  return (
+    <Suspense>
+      <AttributesPageInner />
+    </Suspense>
+  );
+}
+
+function AttributesPageInner() {
   const [attributes, setAttributes] = useState<Attribute[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [summary, setSummary] = useState<Summary>({ total: 0, businessKeys: 0, references: 0, entities: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [entityFilter, setEntityFilter] = useState('all');
+  // 'all' or a numeric entity id (as string) - was previously matched
+  // against attr.entity_name, which meant an entity with zero attributes
+  // (so it never appears in `attributes`) could never be selected here
+  // even via a direct link (?entity_id=...).
+  const [entityFilter, setEntityFilter] = useFilterPersistence('entity_id', 'mds_filter_attributes_entity', 'all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -196,12 +209,11 @@ export default function AttributesPage() {
       attr.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
       attr.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       attr.entity_name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesEntity = entityFilter === 'all' || attr.entity_name === entityFilter;
+    const matchesEntity = entityFilter === 'all' || attr.entity_id === Number(entityFilter);
     const matchesType = typeFilter === 'all' || attr.data_type === typeFilter;
     return matchesSearch && matchesEntity && matchesType;
   });
 
-  const uniqueEntityNames = [...new Set(attributes.map((a) => a.entity_name))];
   const dataTypes = [...new Set(attributes.map((a) => a.data_type))];
 
   const formatDate = (dateString: string) => {
@@ -379,9 +391,9 @@ export default function AttributesPage() {
               onChange={(e) => setEntityFilter(e.target.value)}
             >
               <option value="all">All Entities</option>
-              {uniqueEntityNames.map((entity) => (
-                <option key={entity} value={entity}>
-                  {entity}
+              {entities.map((entity) => (
+                <option key={entity.id} value={entity.id}>
+                  {entity.name} ({entity.model_code})
                 </option>
               ))}
             </HTMLSelect>
@@ -399,7 +411,14 @@ export default function AttributesPage() {
             <Button
               icon="add"
               intent="primary"
-              onClick={() => setShowAddDialog(true)}
+              onClick={() => {
+                // Pre-select whichever entity is currently filtered, so the
+                // dialog doesn't force re-picking what's already on screen.
+                if (entityFilter !== 'all') {
+                  setNewAttribute((prev) => ({ ...prev, entity_id: Number(entityFilter) }));
+                }
+                setShowAddDialog(true);
+              }}
             >
               Add Attribute
             </Button>

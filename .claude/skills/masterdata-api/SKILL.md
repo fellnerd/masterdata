@@ -33,7 +33,8 @@ Authorization: Bearer mds_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ## What this API can and can't do
 
 **Can:** full CRUD on staging (`mds_stage.staged_record` - data not yet
-live), read-only access to deployed master data and views.
+live), read-only access to deployed master data and views, and triggering
+an async Data Vault import for an entity that already has one configured.
 
 **Can't:** commit staged records into a commit, or trigger a deploy that
 moves staged data into master. Those actions (`/api/commits`, `/api/deploy`)
@@ -96,6 +97,14 @@ POST body fields:
 - `business_key` - optional if the entity has a designated business-key
   attribute; the server derives it from `data` in that case. Required if not.
 - `data` (required, object) - the record's field values, keyed by attribute code
+
+### Import (async, scope: stage:write)
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/v1/entities/{code}/import` | Triggers a Data Vault import for this entity. Entity must already have an import source configured in the UI (Entities → Import Config) - this endpoint can't set one. Returns `202` with `{ job_id, entity_code, source }` immediately; the import runs asynchronously (replaces the entity's staged records with a fresh pull from the configured source) and doesn't wait for completion. Poll `GET /api/v1/stage/records?entity_id=` afterward to see the result, or tell the user to check the Jobs page for progress/errors. |
+
+`404` if the entity code doesn't exist, `400` if it exists but has no import source configured yet.
 
 ### Master data (read-only)
 

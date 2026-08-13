@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { 
-  Button, 
-  HTMLTable, 
-  Tag, 
+import { Suspense, useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
+import {
+  Button,
+  HTMLTable,
+  Tag,
   Dialog,
   FormGroup,
   InputGroup,
@@ -21,6 +22,8 @@ import {
 import { PageLayout } from '@/components/layout/PageLayout'
 import { KpiCard, KpiGrid } from '@/components/ui/KpiCard'
 import { SectionHeader } from '@/components/ui/SectionHeader'
+
+const STORAGE_KEY = 'mds_filter_data_entity_id'
 
 // Define a type for dynamic data values
 type DataValue = string | number | boolean | null
@@ -62,6 +65,15 @@ interface Summary {
 }
 
 export default function DataEntryPage() {
+  return (
+    <Suspense>
+      <DataEntryPageInner />
+    </Suspense>
+  )
+}
+
+function DataEntryPageInner() {
+  const searchParams = useSearchParams()
   const [entities, setEntities] = useState<Entity[]>([])
   const [attributes, setAttributes] = useState<Attribute[]>([])
   const [records, setRecords] = useState<StagedRecord[]>([])
@@ -87,17 +99,43 @@ export default function DataEntryPage() {
   const [totalRecords, setTotalRecords] = useState(0)
   const [pageSize, setPageSize] = useState(50)
 
-  // Fetch entities on mount
+  // Fetch entities on mount, then pick the initial selection with priority
+  // ?entity_id= (set by Entities page row links) > ?model= (set by Model
+  // card links - first entity of that model) > last selection remembered
+  // in localStorage > first entity overall.
   useEffect(() => {
     const fetchEntities = async () => {
       try {
         const res = await fetch('/api/entities')
         if (!res.ok) throw new Error('Failed to load entities')
         const json = await res.json()
-        setEntities(json.data || [])
-        if (json.data?.length > 0) {
-          setSelectedEntityId(json.data[0].id)
+        const fetchedEntities: Entity[] = json.data || []
+        setEntities(fetchedEntities)
+
+        if (fetchedEntities.length === 0) return
+
+        const entityIdParam = searchParams.get('entity_id')
+        const modelParam = searchParams.get('model')
+        let resolvedId: number | undefined
+
+        if (entityIdParam && fetchedEntities.some(e => e.id === Number(entityIdParam))) {
+          resolvedId = Number(entityIdParam)
+        } else if (modelParam) {
+          resolvedId = fetchedEntities.find(e => e.model_code === modelParam)?.id
         }
+
+        if (!resolvedId) {
+          try {
+            const stored = localStorage.getItem(STORAGE_KEY)
+            if (stored && fetchedEntities.some(e => e.id === Number(stored))) {
+              resolvedId = Number(stored)
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        setSelectedEntityId(resolvedId || fetchedEntities[0].id)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load entities')
       } finally {
@@ -105,6 +143,7 @@ export default function DataEntryPage() {
       }
     }
     fetchEntities()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Fetch attributes when entity changes
@@ -445,9 +484,17 @@ export default function DataEntryPage() {
         title="Master Data Records"
         actions={
           <>
-            <HTMLSelect 
-              value={selectedEntityId} 
-              onChange={(e) => setSelectedEntityId(Number(e.target.value))}
+            <HTMLSelect
+              value={selectedEntityId}
+              onChange={(e) => {
+                const id = Number(e.target.value)
+                setSelectedEntityId(id)
+                try {
+                  localStorage.setItem(STORAGE_KEY, String(id))
+                } catch {
+                  // ignore
+                }
+              }}
               options={entities.map(e => ({ value: e.id, label: e.name }))}
             />
             <HTMLSelect 

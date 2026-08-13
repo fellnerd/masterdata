@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { Suspense, useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { 
-  Button, 
-  HTMLTable, 
-  Tag, 
+import {
+  Button,
+  HTMLTable,
+  Tag,
   Icon,
   Dialog,
   FormGroup,
@@ -18,6 +18,7 @@ import {
 import { PageLayout } from '@/components/layout/PageLayout'
 import { KpiCard, KpiGrid } from '@/components/ui/KpiCard'
 import { SectionHeader } from '@/components/ui/SectionHeader'
+import { useFilterPersistence } from '@/hooks/useFilterPersistence'
 
 interface Entity {
   id: number
@@ -71,12 +72,20 @@ interface Attribute {
 }
 
 export default function EntitiesPage() {
+  return (
+    <Suspense>
+      <EntitiesPageInner />
+    </Suspense>
+  )
+}
+
+function EntitiesPageInner() {
   const router = useRouter()
   const [entities, setEntities] = useState<Entity[]>([])
   const [models, setModels] = useState<Model[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [filterModel, setFilterModel] = useState<string>('')
+  const [filterModel, setFilterModel] = useFilterPersistence('model', 'mds_filter_entities_model')
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
@@ -139,9 +148,19 @@ export default function EntitiesPage() {
     fetchData()
   }, [])
 
-  const filteredEntities = filterModel 
+  const filteredEntities = filterModel
     ? entities.filter(e => e.model_code === filterModel)
     : entities
+
+  const handleOpenCreate = () => {
+    // Pre-select whichever model is currently filtered, so a user who's
+    // already looking at one model's entities doesn't have to re-pick it.
+    const filteredModelId = filterModel ? models.find(m => m.code === filterModel)?.id : undefined
+    if (filteredModelId) {
+      setNewEntity(prev => ({ ...prev, model_id: filteredModelId }))
+    }
+    setIsCreateOpen(true)
+  }
 
   const handleCreate = async () => {
     try {
@@ -415,10 +434,10 @@ export default function EntitiesPage() {
                 ...models.map(m => ({ value: m.code, label: m.name }))
               ]}
             />
-            <Button 
-              icon="add" 
+            <Button
+              icon="add"
               intent="primary"
-              onClick={() => setIsCreateOpen(true)}
+              onClick={handleOpenCreate}
               disabled={models.length === 0}
             >
               New Entity
@@ -432,7 +451,7 @@ export default function EntitiesPage() {
           icon="th"
           title="No entities yet"
           description={models.length === 0 ? "Create a model first, then add entities" : "Create your first entity to get started"}
-          action={models.length > 0 ? <Button icon="add" intent="primary" onClick={() => setIsCreateOpen(true)}>Create Entity</Button> : undefined}
+          action={models.length > 0 ? <Button icon="add" intent="primary" onClick={handleOpenCreate}>Create Entity</Button> : undefined}
         />
       ) : (
         <>

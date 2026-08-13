@@ -22,6 +22,14 @@ import {
 } from '@blueprintjs/core';
 import { useStartJob, type JobType } from '@/hooks/useJobs';
 
+interface ImportableEntity {
+  id: number;
+  code: string;
+  name: string;
+  model_code: string;
+  import_source_object: string | null;
+}
+
 interface CreateJobDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -66,10 +74,11 @@ const jobTypeConfig: Record<JobType, {
   'import': {
     label: 'Import',
     icon: 'import',
-    description: 'Importiert Daten aus externer Quelle',
-    hasTarget: true,
-    targetLabel: 'Import Source',
-    targetPlaceholder: 'z.B. file:data.csv',
+    description: 'Importiert Daten aus der konfigurierten Data-Vault-Quelle einer Entity',
+    // No free-text target - rendered as an entity picker below instead,
+    // limited to entities that actually have an import source configured
+    // (Settings -> Entities -> Import Config).
+    hasTarget: false,
   },
   'export': {
     label: 'Export',
@@ -110,8 +119,10 @@ const jobTypeConfig: Record<JobType, {
 
 // Standardmäßig verfügbare Job-Typen - bewusst nur strukturierte, entity-/commit-
 // gebundene Aktionen. Kein "dbt-run"/"dbt-test" mit freiem Model-Selector:
-// masterdata soll dbt nie als direkten Rohbefehl ausführen können.
-const defaultJobTypes: JobType[] = ['validate', 'deploy', 'schema-deploy'];
+// masterdata soll dbt nie als direkten Rohbefehl ausführen können. 'import'
+// is entity-bound too (picks from a dropdown, see below), not a free-text
+// source string.
+const defaultJobTypes: JobType[] = ['validate', 'deploy', 'schema-deploy', 'import'];
 
 export function CreateJobDialog({ isOpen, onClose, onJobCreated }: CreateJobDialogProps) {
   const [jobType, setJobType] = useState<JobType>('schema-deploy');
@@ -119,25 +130,38 @@ export function CreateJobDialog({ isOpen, onClose, onJobCreated }: CreateJobDial
   const [params, setParams] = useState<Record<string, string | boolean>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [importableEntities, setImportableEntities] = useState<ImportableEntity[]>([]);
+  const [importEntityId, setImportEntityId] = useState<number | null>(null);
 
   const startJobMutation = useStartJob();
 
   const config = jobTypeConfig[jobType];
 
-  // Reset form when dialog opens
+  // Reset form when dialog opens, and load entities that have an import
+  // source configured (Settings -> Entities -> Import Config) for the
+  // Import job type's entity picker.
   const handleOpen = useCallback(() => {
     setJobType('schema-deploy');
     setTarget('*');
     setParams({});
     setError(null);
+    setImportEntityId(null);
+    fetch('/api/entities')
+      .then(res => res.json())
+      .then(json => {
+        const withSource = (json.data || []).filter((e: ImportableEntity) => e.import_source_object);
+        setImportableEntities(withSource);
+        if (withSource.length > 0) setImportEntityId(withSource[0].id);
+      })
+      .catch(() => setImportableEntities([]));
   }, []);
-  
+
   // Handle job type change - reset target and params
   const handleJobTypeChange = (newType: JobType) => {
     setJobType(newType);
     const newConfig = jobTypeConfig[newType];
     setTarget(newConfig.hasTarget ? '*' : '');
-    
+
     // Set default params
     const defaultParams: Record<string, string | boolean> = {};
     newConfig.extraParams?.forEach(param => {
@@ -157,12 +181,21 @@ export function CreateJobDialog({ isOpen, onClose, onJobCreated }: CreateJobDial
   const handleSubmit = async () => {
     setIsSubmitting(true);
     setError(null);
-    
+
     try {
+      const selectedImportEntity = jobType === 'import'
+        ? importableEntities.find(e => e.id === importEntityId)
+        : undefined;
+      if (jobType === 'import' && !selectedImportEntity) {
+        throw new Error('Bitte eine Entity mit konfigurierter Import-Quelle auswählen');
+      }
+
       const result = await startJobMutation.mutateAsync({
         type: jobType,
-        target: config.hasTarget ? target : undefined,
-        params: Object.keys(params).length > 0 ? params : undefined
+        target: jobType === 'import' ? selectedImportEntity!.code : (config.hasTarget ? target : undefined),
+        params: jobType === 'import'
+          ? { entity_id: selectedImportEntity!.id }
+          : (Object.keys(params).length > 0 ? params : undefined)
       });
       
       // Notify parent
@@ -220,8 +253,8 @@ export function CreateJobDialog({ isOpen, onClose, onJobCreated }: CreateJobDial
         
         {/* Target Input */}
         {config.hasTarget && (
-          <FormGroup 
-            label={config.targetLabel || 'Target'} 
+          <FormGroup
+            label={config.targetLabel || 'Target'}
             labelFor="job-target"
             helperText={config.targetPlaceholder}
           >
@@ -233,6 +266,34 @@ export function CreateJobDialog({ isOpen, onClose, onJobCreated }: CreateJobDial
               leftIcon="locate"
             />
           </FormGroup>
+        )}
+
+        {/* Import: entity picker, limited to entities with an import source configured */}
+        {jobType === 'import' && (
+          importableEntities.length === 0 ? (
+            <Callout intent="warning" icon="warning-sign" style={{ marginBottom: 16 }}>
+              Keine Entity mit konfigurierter Import-Quelle gefunden. Unter Entities → Import Config zuerst eine Data-Vault-Quelle zuweisen.
+            </Callout>
+          ) : (
+            <FormGroup
+              label="Entity"
+              labelFor="import-entity"
+              helperText="Nur Entities mit konfigurierter Import-Quelle"
+            >
+              <HTMLSelect
+                id="import-entity"
+                fill
+                value={importEntityId ?? ''}
+                onChange={e => setImportEntityId(Number(e.target.value))}
+              >
+                {importableEntities.map(e => (
+                  <option key={e.id} value={e.id}>
+                    {e.name} ({e.model_code}) - {e.import_source_object}
+                  </option>
+                ))}
+              </HTMLSelect>
+            </FormGroup>
+          )
         )}
         
         {/* Extra Parameters */}
@@ -288,6 +349,7 @@ export function CreateJobDialog({ isOpen, onClose, onJobCreated }: CreateJobDial
             icon="play"
             onClick={handleSubmit}
             loading={isSubmitting}
+            disabled={jobType === 'import' && (importableEntities.length === 0 || !importEntityId)}
           >
             Job starten
           </Button>
