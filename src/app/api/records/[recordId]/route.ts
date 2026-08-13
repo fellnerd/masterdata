@@ -185,28 +185,23 @@ export async function DELETE(
     }
     
     const current = currentRecords[0]
-    
-    // Pending records: Direct delete
-    if (current.status === 'pending') {
+
+    // Records that have never gone through a commit (commit_id still NULL) have
+    // no history to preserve - just remove them. Checking commit_id instead of
+    // status avoids relying on the free-text status column, whose casing isn't
+    // consistent across insert paths (e.g. DB default 'PENDING' vs the records
+    // API's 'pending') - a record can only ever pick up a commit_id by being
+    // attached to a commit, so this is a reliable signal regardless of status casing.
+    if (!current.commit_id) {
       await dbExecute(
         'DELETE FROM mds_stage.staged_record WHERE id = @id',
         { id: parseInt(recordId) }
       )
-      
-      // Update commit record count if attached to commit
-      if (current.commit_id) {
-        await dbExecute(
-          `UPDATE mds_stage.[commit] 
-           SET record_count = (SELECT COUNT(*) FROM mds_stage.staged_record WHERE commit_id = @commitId)
-           WHERE id = @commitId`,
-          { commitId: current.commit_id }
-        )
-      }
-      
+
       return NextResponse.json({ success: true, action: 'deleted' })
     }
-    
-    // Loaded records: Update in-place to DELETE operation (soft delete for master)
+
+    // Already committed (and possibly deployed) records: Update in-place to DELETE operation (soft delete for master)
     // Same pattern as UPDATE - modify existing record, don't create new one
     // Save previous_data so we can restore on reject
     await dbExecute(

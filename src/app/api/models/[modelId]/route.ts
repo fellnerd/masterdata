@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { dbQuery, dbExecute } from '@/lib/db-server'
+import { requireAdmin } from '@/lib/authz'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -150,7 +151,10 @@ export async function DELETE(
 ) {
   const { modelId } = await params
   logger.info({ modelId }, 'DELETE /api/models/[modelId]')
-  
+
+  const authError = await requireAdmin()
+  if (authError) return authError
+
   try {
     // Check if model has entities
     const entities = await dbQuery<{count: number}>(

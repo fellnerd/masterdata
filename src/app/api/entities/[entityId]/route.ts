@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { requireAdmin } from '@/lib/authz'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -164,68 +165,73 @@ export async function PUT(
 }
 
 // DELETE /api/entities/[entityId] - Delete entity
+//
+// Only genuinely *outstanding* work blocks deletion: uncommitted staged
+// records, and commits still in flight (draft/pending/approved - not yet
+// deployed or rejected). Everything else is history - already-deployed
+// staged records, terminal (deployed/rejected) commits, and deployment_log
+// entries - is cleaned up automatically as part of the delete, since it has
+// no further use once the entity itself is gone. schema_deployment has
+// ON DELETE CASCADE in the schema, so it needs no explicit cleanup here.
+//
+// Note: this does NOT drop the physical dbt-generated mds_master/mds_load
+// tables for the entity (e.g. mds_master.<target_table>) - those are
+// managed by dbt runs, not by this API, and may still hold historized
+// data. Deleting the entity here only removes it from MDS metadata/staging.
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ entityId: string }> }
 ) {
   const { entityId } = await params
   logger.info({ entityId }, 'DELETE /api/entities/[entityId]')
-  
+
+  const authError = await requireAdmin()
+  if (authError) return authError
+
   try {
+    const id = parseInt(entityId)
+
     // Check if entity has attributes
     const attributes = await dbQuery<{ count: number }>(
       'SELECT COUNT(*) as count FROM mds_meta.attribute WHERE entity_id = @id',
-      { id: parseInt(entityId) }
+      { id }
     )
-    
+
     if (attributes[0].count > 0) {
       return NextResponse.json(
         { error: 'Cannot delete entity with existing attributes. Delete attributes first.' },
         { status: 400 }
       )
     }
-    
-    // Check if entity has staged records
-    const records = await dbQuery<{ count: number }>(
-      'SELECT COUNT(*) as count FROM mds_stage.staged_record WHERE entity_id = @id',
-      { id: parseInt(entityId) }
-    )
 
-    if (records[0].count > 0) {
+    // Uncommitted staged records are real in-progress work - block on those.
+    // Already-loaded/deployed staged records have no commit left to lose and
+    // are cleaned up below together with the rest of the history.
+    const pendingRecords = await dbQuery<{ count: number }>(
+      "SELECT COUNT(*) as count FROM mds_stage.staged_record WHERE entity_id = @id AND UPPER(status) = 'PENDING'",
+      { id }
+    )
+    if (pendingRecords[0].count > 0) {
       return NextResponse.json(
-        { error: 'Cannot delete entity with staged records. Delete or commit records first.' },
+        { error: `Cannot delete entity: ${pendingRecords[0].count} uncommitted staged record(s). Commit or discard them first.` },
         { status: 400 }
       )
     }
 
-    // Every table below has a foreign key on entity_id/reference_entity_id;
-    // an entity with any deployment/commit history can never actually be
-    // deleted (and generally shouldn't be, since that would orphan the
-    // SCD2 master lineage) - give a specific reason instead of letting the
-    // raw FK violation surface as an unhandled 500.
-    const [commits, deployments, schemaDeployments, views, referencedBy] = await Promise.all([
-      dbQuery<{ count: number }>('SELECT COUNT(*) as count FROM mds_stage.[commit] WHERE entity_id = @id', { id: parseInt(entityId) }),
-      dbQuery<{ count: number }>('SELECT COUNT(*) as count FROM mds_load.deployment_log WHERE entity_id = @id', { id: parseInt(entityId) }),
-      dbQuery<{ count: number }>('SELECT COUNT(*) as count FROM mds_meta.schema_deployment WHERE entity_id = @id', { id: parseInt(entityId) }),
-      dbQuery<{ count: number }>('SELECT COUNT(*) as count FROM mds_meta.entity_view WHERE entity_id = @id', { id: parseInt(entityId) }),
-      dbQuery<{ count: number }>('SELECT COUNT(*) as count FROM mds_meta.attribute WHERE reference_entity_id = @id', { id: parseInt(entityId) }),
+    // Commits still in flight are real outstanding work - block on those.
+    // 'deployed' and 'rejected' are terminal and get cleaned up below.
+    const [outstandingCommits, views, referencedBy] = await Promise.all([
+      dbQuery<{ count: number }>(
+        "SELECT COUNT(*) as count FROM mds_stage.[commit] WHERE entity_id = @id AND status NOT IN ('deployed', 'rejected')",
+        { id }
+      ),
+      dbQuery<{ count: number }>('SELECT COUNT(*) as count FROM mds_meta.entity_view WHERE entity_id = @id', { id }),
+      dbQuery<{ count: number }>('SELECT COUNT(*) as count FROM mds_meta.attribute WHERE reference_entity_id = @id', { id }),
     ])
 
-    if (commits[0].count > 0) {
+    if (outstandingCommits[0].count > 0) {
       return NextResponse.json(
-        { error: `Cannot delete entity with ${commits[0].count} commit(s) in its history.` },
-        { status: 400 }
-      )
-    }
-    if (deployments[0].count > 0) {
-      return NextResponse.json(
-        { error: `Cannot delete entity with ${deployments[0].count} deployment log entr(y/ies).` },
-        { status: 400 }
-      )
-    }
-    if (schemaDeployments[0].count > 0) {
-      return NextResponse.json(
-        { error: 'Cannot delete entity with a schema deployment record. Reset or remove it under Deploy first.' },
+        { error: `Cannot delete entity: ${outstandingCommits[0].count} commit(s) still awaiting review or deployment.` },
         { status: 400 }
       )
     }
@@ -242,10 +248,11 @@ export async function DELETE(
       )
     }
 
-    await dbExecute(
-      'DELETE FROM mds_meta.entity WHERE id = @id',
-      { id: parseInt(entityId) }
-    )
+    // Everything left is terminal history - clean it up, then delete the entity.
+    await dbExecute('DELETE FROM mds_stage.staged_record WHERE entity_id = @id', { id })
+    await dbExecute('DELETE FROM mds_load.deployment_log WHERE entity_id = @id', { id })
+    await dbExecute("DELETE FROM mds_stage.[commit] WHERE entity_id = @id", { id })
+    await dbExecute('DELETE FROM mds_meta.entity WHERE id = @id', { id })
 
     return NextResponse.json({ success: true })
   } catch (error) {

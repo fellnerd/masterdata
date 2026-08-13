@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { requireAdmin } from '@/lib/authz'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -244,7 +245,10 @@ export async function DELETE(
 ) {
   const { attributeId } = await params
   logger.info({ attributeId }, 'DELETE /api/attributes/[attributeId]')
-  
+
+  const authError = await requireAdmin()
+  if (authError) return authError
+
   try {
     // Get entity_id before delete for schema_deployment
     const attrResult = await dbQuery<{ entity_id: number }>(
