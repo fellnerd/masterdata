@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { validateReferenceAttributes } from '@/lib/validateReferences'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -183,7 +184,12 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
-    
+
+    const referenceError = await validateReferenceAttributes(entity_id, data)
+    if (referenceError) {
+      return NextResponse.json({ error: referenceError }, { status: 400 })
+    }
+
     // Calculate business key hash
     const dataJson = JSON.stringify(data)
     

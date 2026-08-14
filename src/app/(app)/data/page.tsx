@@ -22,6 +22,7 @@ import {
 import { PageLayout } from '@/components/layout/PageLayout'
 import { KpiCard, KpiGrid } from '@/components/ui/KpiCard'
 import { SectionHeader } from '@/components/ui/SectionHeader'
+import { ReferenceInput } from '@/components/data/ReferenceInput'
 
 const STORAGE_KEY = 'mds_filter_data_entity_id'
 
@@ -43,6 +44,8 @@ interface Attribute {
   data_type: string
   is_required: boolean
   is_business_key: boolean
+  reference_entity_id: number | null
+  reference_entity_code?: string | null
 }
 
 interface StagedRecord {
@@ -206,6 +209,45 @@ function DataEntryPageInner() {
 
   const selectedEntity = entities.find(e => e.id === selectedEntityId)
   const businessKeyAttr = attributes.find(a => a.is_business_key)
+
+  // Shared field control for the Add/Edit Record forms: a reference-type
+  // attribute gets the fuzzy-search picker, everything else keeps the plain
+  // text/number input.
+  const renderFieldControl = (
+    attr: Attribute,
+    fieldId: string,
+    values: Record<string, DataValue>,
+    setValues: (next: Record<string, DataValue>) => void
+  ) => {
+    if (attr.data_type === 'reference' && attr.reference_entity_id) {
+      return (
+        <ReferenceInput
+          id={fieldId}
+          referencedEntityId={attr.reference_entity_id}
+          referencedEntityName={attr.reference_entity_code || undefined}
+          value={String(values[attr.code] ?? '')}
+          onChange={(v) => setValues({ ...values, [attr.code]: v })}
+          intent={attr.is_business_key ? 'primary' : 'none'}
+        />
+      )
+    }
+
+    return (
+      <InputGroup
+        id={fieldId}
+        type={attr.data_type === 'integer' || attr.data_type === 'decimal' ? 'number' : 'text'}
+        placeholder={`Enter ${attr.name.toLowerCase()}`}
+        value={String(values[attr.code] ?? '')}
+        onChange={(e) => setValues({
+          ...values,
+          [attr.code]: attr.data_type === 'integer' ? parseInt(e.target.value) || '' :
+                       attr.data_type === 'decimal' ? parseFloat(e.target.value) || '' :
+                       e.target.value
+        })}
+        intent={attr.is_business_key ? 'primary' : 'none'}
+      />
+    )
+  }
 
   const handleCreate = async () => {
     if (!selectedEntityId || !businessKeyAttr) return
@@ -714,19 +756,7 @@ function DataEntryPageInner() {
               labelInfo={attr.is_required ? '(required)' : ''}
               helperText={attr.is_business_key ? 'Business Key' : undefined}
             >
-              <InputGroup
-                id={attr.code}
-                type={attr.data_type === 'integer' || attr.data_type === 'decimal' ? 'number' : 'text'}
-                placeholder={`Enter ${attr.name.toLowerCase()}`}
-                value={String(newRecord[attr.code] ?? '')}
-                onChange={(e) => setNewRecord({ 
-                  ...newRecord, 
-                  [attr.code]: attr.data_type === 'integer' ? parseInt(e.target.value) || '' :
-                               attr.data_type === 'decimal' ? parseFloat(e.target.value) || '' :
-                               e.target.value 
-                })}
-                intent={attr.is_business_key ? 'primary' : 'none'}
-              />
+              {renderFieldControl(attr, attr.code, newRecord, setNewRecord)}
             </FormGroup>
           ))}
         </div>
@@ -865,19 +895,7 @@ function DataEntryPageInner() {
               labelInfo={attr.is_required ? '(required)' : ''}
               helperText={attr.is_business_key ? 'Business Key' : undefined}
             >
-              <InputGroup
-                id={`edit-${attr.code}`}
-                type={attr.data_type === 'integer' || attr.data_type === 'decimal' ? 'number' : 'text'}
-                placeholder={`Enter ${attr.name.toLowerCase()}`}
-                value={String(editData[attr.code] ?? '')}
-                onChange={(e) => setEditData({ 
-                  ...editData, 
-                  [attr.code]: attr.data_type === 'integer' ? parseInt(e.target.value) || '' :
-                               attr.data_type === 'decimal' ? parseFloat(e.target.value) || '' :
-                               e.target.value 
-                })}
-                intent={attr.is_business_key ? 'primary' : 'none'}
-              />
+              {renderFieldControl(attr, `edit-${attr.code}`, editData, setEditData)}
             </FormGroup>
           ))}
         </div>
