@@ -603,7 +603,7 @@ function DataEntryPageInner() {
                   />
                 </th>
                 <th>Business Key</th>
-                {attributes.slice(0, 4).map(attr => (
+                {attributes.map(attr => (
                   <th key={attr.id}>{attr.name}</th>
                 ))}
                 <th>Operation</th>
@@ -622,7 +622,7 @@ function DataEntryPageInner() {
                     />
                   </td>
                   <td><strong>{record.business_key}</strong></td>
-                  {attributes.slice(0, 4).map(attr => (
+                  {attributes.map(attr => (
                     <td key={attr.id}>
                       {String(record.data[attr.code] ?? '-')}
                       </td>

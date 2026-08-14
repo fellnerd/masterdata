@@ -88,20 +88,21 @@ export async function PUT(
     const updates: string[] = []
     const queryParams: Record<string, unknown> = { id: parseInt(recordId) }
     
-    // If record was already deployed (loaded), change operation to UPDATE and reset to pending
-    // This enables SCD2 historization when deployed to master
-    // Also save previous_data so we can restore on reject
-    if (current.status === 'loaded') {
+    // If the record has already been through a commit (commit_id set - the
+    // reliable signal, see DELETE handler for the same reasoning: status text
+    // isn't consistent across insert paths, and worker.ts sets 'COMMITTED' on
+    // attach, never 'loaded'), editing it needs to flag a new commit as
+    // outstanding rather than silently changing already-committed/deployed
+    // data in place. Reset operation to UPDATE and status to pending so it
+    // shows up in the draft count and "commit pending records" picks it up
+    // again, and save previous_data for a potential reject rollback.
+    if (current.commit_id !== null) {
       updates.push('operation = \'UPDATE\'')
       updates.push('status = \'pending\'')
-      // Clear commit_id - the record needs to go through a NEW commit, since the
-      // old commit it's still pointing at is already approved/deployed. Without this,
-      // "commit pending records" (WHERE commit_id IS NULL) never picks it back up.
       updates.push('commit_id = NULL')
-      // Save current data as previous_data for potential reject rollback
       updates.push('previous_data = data')
-      logger.info({ recordId, previousStatus: current.status },
-        'Resetting deployed record to pending with UPDATE operation for SCD2')
+      logger.info({ recordId, previousCommitId: current.commit_id },
+        'Resetting already-committed record to pending with UPDATE operation for SCD2')
     }
     
     if (data !== undefined) {
@@ -134,8 +135,9 @@ export async function PUT(
       }
     }
     
-    if (operation !== undefined && current.status !== 'loaded') {
-      // Only allow explicit operation change if not already deployed
+    if (operation !== undefined && current.commit_id === null) {
+      // Only allow explicit operation change if never committed - once
+      // committed, the reset above already forces operation to UPDATE
       updates.push('operation = @operation')
       queryParams.operation = operation
     }
