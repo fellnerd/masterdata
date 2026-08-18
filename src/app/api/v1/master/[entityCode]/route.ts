@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
+import { resolveEntityId } from '@/lib/services/entityService'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -12,18 +13,25 @@ const READ_ONLY_MESSAGE = 'mds_master is read-only via the API. Write data throu
 // The code is checked against mds_meta.entity (a trusted metadata source) and
 // against a strict identifier pattern before ever being interpolated into SQL,
 // which is otherwise unavoidable here since table names can't be parameterized.
-async function resolveMasterTable(entityCode: string): Promise<{ ok: true; table: string; entity: { id: number; code: string; name: string } } | { ok: false; status: number; error: string }> {
+// entity.code is only unique per-model, not globally - resolveEntityId
+// returns 409 if the code is ambiguous across models without modelCode.
+async function resolveMasterTable(
+  entityCode: string,
+  modelCode?: string
+): Promise<{ ok: true; table: string; entity: { id: number; code: string; name: string } } | { ok: false; status: number; error: string }> {
   if (!/^[a-zA-Z0-9_]+$/.test(entityCode)) {
     return { ok: false, status: 400, error: 'Invalid entity code' }
   }
 
-  const entities = await dbQuery<{ id: number; code: string; name: string }>(
-    'SELECT id, code, name FROM mds_meta.entity WHERE code = @code',
-    { code: entityCode }
-  )
-  if (entities.length === 0) {
-    return { ok: false, status: 404, error: `Unknown entity code: ${entityCode}` }
+  const resolved = await resolveEntityId(entityCode, modelCode)
+  if (!resolved.ok) {
+    return resolved
   }
+
+  const entities = await dbQuery<{ id: number; code: string; name: string }>(
+    'SELECT id, code, name FROM mds_meta.entity WHERE id = @id',
+    { id: resolved.data }
+  )
 
   const table = entities[0].code.toLowerCase()
 
@@ -52,13 +60,13 @@ export async function GET(
   }
 
   const { entityCode } = await params
-  const resolved = await resolveMasterTable(entityCode)
+  const { searchParams } = new URL(request.url)
+  const resolved = await resolveMasterTable(entityCode, searchParams.get('model_code') || undefined)
   if (!resolved.ok) {
     return NextResponse.json({ error: resolved.error }, { status: resolved.status })
   }
 
   try {
-    const { searchParams } = new URL(request.url)
     const businessKey = searchParams.get('business_key')
     const includeHistory = searchParams.get('history') === 'true'
     const page = parseInt(searchParams.get('page') || '1')

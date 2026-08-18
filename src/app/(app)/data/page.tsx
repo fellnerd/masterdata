@@ -11,18 +11,22 @@ import {
   InputGroup,
   HTMLSelect,
   Checkbox,
+  NumericInput,
   Tabs,
   Tab,
   Spinner,
   NonIdealState,
   Callout,
   Icon,
-  TextArea
+  TextArea,
+  Collapse
 } from '@blueprintjs/core'
+import { DateInput } from '@blueprintjs/datetime'
 import { PageLayout } from '@/components/layout/PageLayout'
 import { KpiCard, KpiGrid } from '@/components/ui/KpiCard'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import { ReferenceInput } from '@/components/data/ReferenceInput'
+import { useAttributeFilterPersistence } from '@/hooks/useAttributeFilterPersistence'
 
 const STORAGE_KEY = 'mds_filter_data_entity_id'
 
@@ -101,6 +105,15 @@ function DataEntryPageInner() {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalRecords, setTotalRecords] = useState(0)
   const [pageSize, setPageSize] = useState(50)
+  const [attributeFilters, setAttributeFilters] = useAttributeFilterPersistence(selectedEntityId || undefined)
+  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false)
+
+  // Query string fragment for the active attr.* filters, shared by the
+  // records fetch effect and refreshRecords below.
+  const attributeFilterQuery = Object.entries(attributeFilters)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('')
 
   // Fetch entities on mount, then pick the initial selection with priority
   // ?entity_id= (set by Entities page row links) > ?model= (set by Model
@@ -167,19 +180,19 @@ function DataEntryPageInner() {
     fetchAttributes()
   }, [selectedEntityId])
 
-  // Fetch records when entity, page or pageSize changes
+  // Fetch records when entity, page, pageSize or attribute filters change
   useEffect(() => {
     if (!selectedEntityId) return
-    
+
     const fetchRecords = async () => {
       try {
         setLoading(true)
-        const recordsRes = await fetch(`/api/records?entity_id=${selectedEntityId}&page=${currentPage}&pageSize=${pageSize}`)
-        
+        const recordsRes = await fetch(`/api/records?entity_id=${selectedEntityId}&page=${currentPage}&pageSize=${pageSize}${attributeFilterQuery}`)
+
         if (!recordsRes.ok) throw new Error('Failed to load data')
-        
+
         const recordsJson = await recordsRes.json()
-        
+
         setRecords(recordsJson.data || [])
         setTotalRecords(recordsJson.pagination?.total || recordsJson.summary?.total || 0)
         setSummary(recordsJson.summary || { total: 0, draft: 0, validated: 0, invalid: 0 })
@@ -190,11 +203,11 @@ function DataEntryPageInner() {
       }
     }
     fetchRecords()
-  }, [selectedEntityId, currentPage, pageSize])
+  }, [selectedEntityId, currentPage, pageSize, attributeFilterQuery])
 
   // Helper function to refresh records
   const refreshRecords = async () => {
-    const recordsRes = await fetch(`/api/records?entity_id=${selectedEntityId}&page=${currentPage}&pageSize=${pageSize}`)
+    const recordsRes = await fetch(`/api/records?entity_id=${selectedEntityId}&page=${currentPage}&pageSize=${pageSize}${attributeFilterQuery}`)
     const recordsJson = await recordsRes.json()
     setRecords(recordsJson.data || [])
     setTotalRecords(recordsJson.pagination?.total || recordsJson.summary?.total || 0)
@@ -210,9 +223,11 @@ function DataEntryPageInner() {
   const selectedEntity = entities.find(e => e.id === selectedEntityId)
   const businessKeyAttr = attributes.find(a => a.is_business_key)
 
-  // Shared field control for the Add/Edit Record forms: a reference-type
-  // attribute gets the fuzzy-search picker, everything else keeps the plain
-  // text/number input.
+  // Shared field control for the Add/Edit Record forms, dispatched by
+  // data_type so stored values are canonical (JSON boolean/number, ISO date)
+  // rather than whatever raw string someone typed - the attribute filters
+  // (see attributeFilters.ts) TRY_CAST these values per type, so a
+  // non-canonical stored value would silently fail to match a filter.
   const renderFieldControl = (
     attr: Attribute,
     fieldId: string,
@@ -232,18 +247,65 @@ function DataEntryPageInner() {
       )
     }
 
+    if (attr.data_type === 'boolean') {
+      const raw = values[attr.code]
+      const checked = raw === true || raw === 'true'
+      return (
+        <Checkbox
+          id={fieldId}
+          checked={checked}
+          label={attr.name}
+          onChange={(e) => setValues({ ...values, [attr.code]: (e.target as HTMLInputElement).checked })}
+        />
+      )
+    }
+
+    if (attr.data_type === 'date' || attr.data_type === 'datetime') {
+      const isDatetime = attr.data_type === 'datetime'
+      const raw = values[attr.code]
+      return (
+        <DateInput
+          inputProps={{
+            id: fieldId,
+            placeholder: `Enter ${attr.name.toLowerCase()}`,
+            intent: attr.is_business_key ? 'primary' : 'none'
+          }}
+          value={raw ? String(raw) : null}
+          dateFnsFormat={isDatetime ? "yyyy-MM-dd'T'HH:mm" : 'yyyy-MM-dd'}
+          timePrecision={isDatetime ? 'minute' : undefined}
+          canClearSelection
+          showActionsBar
+          onChange={(newDate) => setValues({ ...values, [attr.code]: newDate ?? '' })}
+        />
+      )
+    }
+
+    if (attr.data_type === 'integer' || attr.data_type === 'decimal') {
+      const raw = values[attr.code]
+      return (
+        <NumericInput
+          id={fieldId}
+          fill
+          placeholder={`Enter ${attr.name.toLowerCase()}`}
+          value={raw === '' || raw === undefined || raw === null ? '' : Number(raw)}
+          stepSize={attr.data_type === 'integer' ? 1 : 0.01}
+          minorStepSize={attr.data_type === 'integer' ? null : 0.01}
+          intent={attr.is_business_key ? 'primary' : 'none'}
+          onValueChange={(valueAsNumber, valueAsString) => setValues({
+            ...values,
+            [attr.code]: valueAsString === '' || Number.isNaN(valueAsNumber) ? '' : valueAsNumber
+          })}
+        />
+      )
+    }
+
     return (
       <InputGroup
         id={fieldId}
-        type={attr.data_type === 'integer' || attr.data_type === 'decimal' ? 'number' : 'text'}
+        type="text"
         placeholder={`Enter ${attr.name.toLowerCase()}`}
         value={String(values[attr.code] ?? '')}
-        onChange={(e) => setValues({
-          ...values,
-          [attr.code]: attr.data_type === 'integer' ? parseInt(e.target.value) || '' :
-                       attr.data_type === 'decimal' ? parseFloat(e.target.value) || '' :
-                       e.target.value
-        })}
+        onChange={(e) => setValues({ ...values, [attr.code]: e.target.value })}
         intent={attr.is_business_key ? 'primary' : 'none'}
       />
     )
@@ -549,8 +611,15 @@ function DataEntryPageInner() {
                 { value: 'invalid', label: 'Invalid' }
               ]}
             />
-            <Button 
-              icon="trash" 
+            <Button
+              icon="filter"
+              active={isFilterPanelOpen}
+              onClick={() => setIsFilterPanelOpen(!isFilterPanelOpen)}
+            >
+              Filters{Object.values(attributeFilters).filter(Boolean).length > 0 ? ` (${Object.values(attributeFilters).filter(Boolean).length})` : ''}
+            </Button>
+            <Button
+              icon="trash"
               intent="danger"
               disabled={selectedRecordIds.size === 0}
               loading={isDeleting}
@@ -558,8 +627,8 @@ function DataEntryPageInner() {
             >
               Löschen ({selectedRecordIds.size})
             </Button>
-            <Button 
-              icon="add" 
+            <Button
+              icon="add"
               intent="primary"
               onClick={() => setIsCreateOpen(true)}
               disabled={!selectedEntityId || attributes.length === 0}
@@ -569,6 +638,133 @@ function DataEntryPageInner() {
           </>
         }
       />
+
+      <Collapse isOpen={isFilterPanelOpen}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+          gap: 12,
+          padding: 16,
+          marginBottom: 16,
+          border: '1px solid var(--border-color, #d3d8de)',
+          borderRadius: 4
+        }}>
+          {attributes.map(attr => {
+            const key = `attr.${attr.code}`
+            const update = (patch: Record<string, string>) => {
+              const next = { ...attributeFilters, ...patch }
+              Object.keys(next).forEach(k => { if (!next[k]) delete next[k] })
+              setAttributeFilters(next)
+              setCurrentPage(1)
+            }
+
+            if (attr.data_type === 'reference' && attr.reference_entity_id) {
+              return (
+                <FormGroup key={attr.id} label={attr.name} labelFor={`filter-${attr.code}`}>
+                  <ReferenceInput
+                    id={`filter-${attr.code}`}
+                    referencedEntityId={attr.reference_entity_id}
+                    referencedEntityName={attr.reference_entity_code || undefined}
+                    value={attributeFilters[key] ?? ''}
+                    onChange={(v) => update({ [key]: v })}
+                  />
+                </FormGroup>
+              )
+            }
+
+            if (attr.data_type === 'boolean') {
+              return (
+                <FormGroup key={attr.id} label={attr.name} labelFor={`filter-${attr.code}`}>
+                  <HTMLSelect
+                    id={`filter-${attr.code}`}
+                    fill
+                    value={attributeFilters[key] ?? ''}
+                    onChange={(e) => update({ [key]: e.target.value })}
+                    options={[
+                      { value: '', label: 'All' },
+                      { value: 'true', label: 'True' },
+                      { value: 'false', label: 'False' }
+                    ]}
+                  />
+                </FormGroup>
+              )
+            }
+
+            if (attr.data_type === 'integer' || attr.data_type === 'decimal') {
+              const minKey = `${key}.min`
+              const maxKey = `${key}.max`
+              return (
+                <FormGroup key={attr.id} label={attr.name}>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <NumericInput
+                      placeholder="Min"
+                      buttonPosition="none"
+                      value={attributeFilters[minKey] ?? ''}
+                      onValueChange={(_n, str) => update({ [minKey]: str })}
+                    />
+                    <NumericInput
+                      placeholder="Max"
+                      buttonPosition="none"
+                      value={attributeFilters[maxKey] ?? ''}
+                      onValueChange={(_n, str) => update({ [maxKey]: str })}
+                    />
+                  </div>
+                </FormGroup>
+              )
+            }
+
+            if (attr.data_type === 'date' || attr.data_type === 'datetime') {
+              const isDatetime = attr.data_type === 'datetime'
+              const fromKey = `${key}.from`
+              const toKey = `${key}.to`
+              const fmt = isDatetime ? "yyyy-MM-dd'T'HH:mm" : 'yyyy-MM-dd'
+              return (
+                <FormGroup key={attr.id} label={attr.name}>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <DateInput
+                      inputProps={{ placeholder: 'From' }}
+                      value={attributeFilters[fromKey] || null}
+                      dateFnsFormat={fmt}
+                      timePrecision={isDatetime ? 'minute' : undefined}
+                      canClearSelection
+                      onChange={(d) => update({ [fromKey]: d ?? '' })}
+                    />
+                    <DateInput
+                      inputProps={{ placeholder: 'To' }}
+                      value={attributeFilters[toKey] || null}
+                      dateFnsFormat={fmt}
+                      timePrecision={isDatetime ? 'minute' : undefined}
+                      canClearSelection
+                      onChange={(d) => update({ [toKey]: d ?? '' })}
+                    />
+                  </div>
+                </FormGroup>
+              )
+            }
+
+            return (
+              <FormGroup key={attr.id} label={attr.name} labelFor={`filter-${attr.code}`}>
+                <InputGroup
+                  id={`filter-${attr.code}`}
+                  placeholder="Contains..."
+                  value={attributeFilters[key] ?? ''}
+                  onChange={(e) => update({ [key]: e.target.value })}
+                />
+              </FormGroup>
+            )
+          })}
+          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+            <Button
+              icon="filter-remove"
+              minimal
+              disabled={Object.keys(attributeFilters).length === 0}
+              onClick={() => { setAttributeFilters({}); setCurrentPage(1) }}
+            >
+              Clear filters
+            </Button>
+          </div>
+        </div>
+      </Collapse>
 
       {entities.length === 0 && (
         <Callout intent="warning" icon="info-sign" style={{ marginBottom: 16 }}>

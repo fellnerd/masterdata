@@ -20,6 +20,11 @@ interface ApiTokenRow {
 // (no separate scope-picker UI) while matching the CRUD/RO split:
 // stage gets full CRUD for editor/approver/admin, read-only for viewer;
 // master, views and entities (metadata) are always read-only for everyone.
+// Model/Entity/Attribute *writes* (schema-level changes, not data-level like
+// stage) are admin-only - stricter than stage:write's editor+ bucket. Since
+// scopes are frozen at issuance, admin-only routes also re-check the
+// caller's CURRENT role live (see requireAdminForToken in src/lib/authz.ts)
+// rather than trusting this scope alone.
 function scopesForRoles(roles: string[]): string[] {
   const scopes = new Set(['master:read', 'views:read', 'entities:read'])
   if (roles.some(r => ['editor', 'approver', 'admin'].includes(r))) {
@@ -27,6 +32,11 @@ function scopesForRoles(roles: string[]): string[] {
     scopes.add('stage:write')
   } else {
     scopes.add('stage:read')
+  }
+  if (roles.includes('admin')) {
+    scopes.add('models:write')
+    scopes.add('entities:write')
+    scopes.add('attributes:write')
   }
   return Array.from(scopes)
 }

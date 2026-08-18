@@ -58,7 +58,11 @@ export const authConfig: NextAuthConfig = {
       // /api/commits routes have no auth check of their own, so they must NOT
       // be listed here - they need the session gate below like every other
       // internal route, matching the pages that call them.
-      const publicRoutes = ['/login', '/api/auth', '/api/health', '/api/v1'];
+      // /api-docs is the interactive API reference for /api/v1 - deliberately
+      // not gated by MSAL/session login either, since it authenticates
+      // "Try it out" calls via a pasted API token inside the page itself
+      // (Scalar's own Authorize dialog), not via the app's session.
+      const publicRoutes = ['/login', '/api/auth', '/api/health', '/api/v1', '/api-docs'];
       if (publicRoutes.some(route => pathname.startsWith(route))) {
         return true;
       }

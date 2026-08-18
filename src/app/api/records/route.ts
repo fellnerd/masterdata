@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { validateReferenceAttributes } from '@/lib/validateReferences'
+import { buildRecordFilters } from '@/lib/attributeFilters'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,32 +30,18 @@ export async function GET(request: NextRequest) {
   
   try {
     const { searchParams } = new URL(request.url)
-    const entityId = searchParams.get('entity_id')
-    const commitId = searchParams.get('commit_id')
-    const status = searchParams.get('status')
     const page = parseInt(searchParams.get('page') || '1')
     const pageSize = parseInt(searchParams.get('pageSize') || '50')
     const offset = (page - 1) * pageSize
-    
-    // Build WHERE clause for both count and data queries
-    let whereClause = 'WHERE 1=1'
-    const params: Record<string, unknown> = {}
-    
-    if (entityId) {
-      whereClause += ` AND r.entity_id = @entityId`
-      params.entityId = parseInt(entityId)
+
+    // Build WHERE clause for both count and data queries (entity_id/commit_id/
+    // status plus optional attr.* attribute-value filters)
+    const filterResult = await buildRecordFilters(searchParams)
+    if (!filterResult.ok) {
+      return NextResponse.json({ error: filterResult.error }, { status: filterResult.status })
     }
-    
-    if (commitId) {
-      whereClause += ` AND r.commit_id = @commitId`
-      params.commitId = parseInt(commitId)
-    }
-    
-    if (status) {
-      whereClause += ` AND r.status = @status`
-      params.status = status
-    }
-    
+    const { whereClause, params } = filterResult
+
     // Get total count for pagination
     const countSql = `
       SELECT COUNT(*) AS total

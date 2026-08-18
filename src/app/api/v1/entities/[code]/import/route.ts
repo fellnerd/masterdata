@@ -3,6 +3,7 @@ import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
 import { addJob } from '@/lib/queue/queue'
+import { resolveEntityId } from '@/lib/services/entityService'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -26,14 +27,20 @@ export async function POST(
   const { code } = await params
 
   try {
-    const entities = await dbQuery<{ id: number; code: string; import_source_object: string | null }>(
-      'SELECT id, code, import_source_object FROM mds_meta.entity WHERE code = @code',
-      { code }
-    )
+    const { searchParams } = new URL(request.url)
+    const modelCode = searchParams.get('model_code') || undefined
 
-    if (entities.length === 0) {
-      return NextResponse.json({ error: `Unknown entity code: ${code}` }, { status: 404 })
+    // entity.code is only unique per-model, not globally - resolveEntityId
+    // returns 409 if the code is ambiguous across models without model_code.
+    const resolved = await resolveEntityId(code, modelCode)
+    if (!resolved.ok) {
+      return NextResponse.json({ error: resolved.error }, { status: resolved.status })
     }
+
+    const entities = await dbQuery<{ id: number; code: string; import_source_object: string | null }>(
+      'SELECT id, code, import_source_object FROM mds_meta.entity WHERE id = @id',
+      { id: resolved.data }
+    )
 
     const entity = entities[0]
     if (!entity.import_source_object) {

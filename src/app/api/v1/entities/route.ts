@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
+import { requireAdminForToken } from '@/lib/authz'
+import { createEntity } from '@/lib/services/entityService'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -97,5 +99,27 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     logger.error({ error }, 'v1/entities GET failed')
     return NextResponse.json({ error: 'Failed to list entities', details: String(error) }, { status: 500 })
+  }
+}
+
+// POST /api/v1/entities - Create an entity (scope: entities:write, admin only)
+export async function POST(request: NextRequest) {
+  const auth = await verifyApiToken(request, 'entities:write')
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+  const adminError = await requireAdminForToken(auth.userId)
+  if (adminError) return adminError
+
+  try {
+    const body = await request.json()
+    const result = await createEntity({ ...body, created_by: `token:${auth.userId}` })
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: result.status })
+    }
+    return NextResponse.json(result.data, { status: 201 })
+  } catch (error) {
+    logger.error({ error }, 'v1/entities POST failed')
+    return NextResponse.json({ error: 'Failed to create entity', details: String(error) }, { status: 500 })
   }
 }
