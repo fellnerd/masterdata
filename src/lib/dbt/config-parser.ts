@@ -107,24 +107,191 @@ function inferModelType(filePath: string, fileName: string): DbtModel['type'] {
   return 'view'
 }
 
+// Blanks out (with spaces, preserving newlines) every SQL/Jinja comment -
+// `{# ... #}`, `-- ...`, `/* ... */` - so paren-depth tracking can't be
+// thrown off by a stray unmatched paren in free-text prose (dbt model
+// headers here routinely document design decisions in German prose inside
+// `{# #}` blocks, and prose is not guaranteed to have balanced parens the
+// way real SQL/Jinja code is). Indices are preserved so callers can keep
+// using offsets into the original string.
+function stripSqlComments(text: string): string {
+  let out = ''
+  let quote: string | null = null
+  let i = 0
+
+  while (i < text.length) {
+    const ch = text[i]
+
+    if (quote) {
+      out += ch
+      if (ch === quote) {
+        if (quote === "'" && text[i + 1] === "'") {
+          out += text[i + 1]
+          i += 2
+          continue
+        }
+        quote = null
+      }
+      i++
+      continue
+    }
+
+    if (ch === "'" || ch === '"') {
+      quote = ch
+      out += ch
+      i++
+      continue
+    }
+
+    if (ch === '{' && text[i + 1] === '#') {
+      const end = text.indexOf('#}', i + 2)
+      const stop = end === -1 ? text.length : end + 2
+      out += text.slice(i, stop).replace(/[^\n]/g, ' ')
+      i = stop
+      continue
+    }
+
+    if (ch === '-' && text[i + 1] === '-') {
+      const end = text.indexOf('\n', i)
+      const stop = end === -1 ? text.length : end
+      out += text.slice(i, stop).replace(/[^\n]/g, ' ')
+      i = stop
+      continue
+    }
+
+    if (ch === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2)
+      const stop = end === -1 ? text.length : end + 2
+      out += text.slice(i, stop).replace(/[^\n]/g, ' ')
+      i = stop
+      continue
+    }
+
+    out += ch
+    i++
+  }
+
+  return out
+}
+
+// Splits a SELECT clause into its top-level column expressions - a plain
+// comma split breaks on the commas inside CAST(...)/CASE...END/function
+// calls, so this tracks paren depth and string-literal state and only
+// splits on commas at depth 0.
+function splitTopLevelColumns(selectClause: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let current = ''
+  let quote: string | null = null
+
+  for (let i = 0; i < selectClause.length; i++) {
+    const ch = selectClause[i]
+
+    if (quote) {
+      current += ch
+      if (ch === quote) {
+        // '' is an escaped quote inside a SQL string literal, not the end of it
+        if (quote === "'" && selectClause[i + 1] === "'") {
+          current += selectClause[++i]
+        } else {
+          quote = null
+        }
+      }
+      continue
+    }
+
+    if (ch === "'" || ch === '"') {
+      quote = ch
+      current += ch
+    } else if (ch === '(') {
+      depth++
+      current += ch
+    } else if (ch === ')') {
+      depth--
+      current += ch
+    } else if (ch === ',' && depth === 0) {
+      parts.push(current)
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  if (current.trim()) parts.push(current)
+
+  return parts
+}
+
+// Derives the resulting column name for one (already comma-split) SELECT
+// expression, the same way SQL Server would name it:
+// - an explicit `... AS alias` (or `[alias]`) always wins
+// - otherwise, a simple (possibly qualified) identifier is named after its
+//   last segment (`c.product_title` -> `product_title`)
+// - anything else (a bare literal, or an unaliased expression) has no
+//   derivable name and is skipped rather than guessed at
+function columnNameFromExpr(expr: string): string | null {
+  const trimmed = expr.trim().replace(/\s+/g, ' ')
+  if (!trimmed || trimmed === '*') return null
+
+  const asMatch = trimmed.match(/\bAS\s+(\[?\w+\]?)\s*$/i)
+  if (asMatch) return asMatch[1].replace(/[[\]]/g, '')
+
+  if (/^[\w[\]]+(\.[\w[\]]+)*$/.test(trimmed)) {
+    const segments = trimmed.split('.')
+    return segments[segments.length - 1].replace(/[[\]]/g, '')
+  }
+
+  return null
+}
+
+// Paren depth at a given offset into text (quote-aware, matching
+// splitTopLevelColumns) - used to tell a query's outermost SELECT apart
+// from a SELECT nested inside a CTE body or subquery, both of which sit
+// inside an extra pair of parens the outer one doesn't have.
+function parenDepthAt(text: string, index: number): number {
+  let depth = 0
+  let quote: string | null = null
+  for (let i = 0; i < index; i++) {
+    const ch = text[i]
+    if (quote) {
+      if (ch === quote) {
+        if (quote === "'" && text[i + 1] === "'") i++
+        else quote = null
+      }
+      continue
+    }
+    if (ch === "'" || ch === '"') quote = ch
+    else if (ch === '(') depth++
+    else if (ch === ')') depth--
+  }
+  return depth
+}
+
 /**
- * Extract column names from SQL file
- * Simple regex-based extraction from SELECT statements
+ * Extract column names from SQL file - parses the outermost SELECT
+ * statement's column list rather than guessing with a single regex, so it
+ * survives CTEs, CAST/CASE expressions and qualified column references.
+ * CTE bodies and subqueries are skipped (they sit at paren depth > 0): their
+ * columns don't necessarily appear in - or keep the same name as in - the
+ * query's actual result set.
  */
 function extractColumnsFromSql(sqlContent: string): string[] {
   const columns: string[] = []
 
+  // Comments stripped first (see stripSqlComments) so a stray unmatched
+  // paren in free-text prose can't throw off the depth tracking below.
+  const cleaned = stripSqlComments(sqlContent)
+
   // Try to find columns in the final SELECT statement or CTE
   // Pattern: looks for column names in SELECT ... FROM patterns
   const selectPattern = /SELECT\s+([\s\S]*?)\s+FROM/gi
-  const matches = sqlContent.matchAll(selectPattern)
+  const matches = cleaned.matchAll(selectPattern)
 
   for (const match of matches) {
+    if (parenDepthAt(cleaned, match.index) !== 0) continue
+
     const selectClause = match[1]
-    // Extract column names (simplified - handles common patterns)
-    const columnMatches = selectClause.matchAll(/(?:^|,)\s*(?:[\w.]+\s+AS\s+)?(\w+)\s*(?:,|$)/gi)
-    for (const colMatch of columnMatches) {
-      const colName = colMatch[1]
+    for (const part of splitTopLevelColumns(selectClause)) {
+      const colName = columnNameFromExpr(part)
       if (colName && !columns.includes(colName) && !colName.match(/^(SELECT|FROM|WHERE|AND|OR)$/i)) {
         columns.push(colName)
       }
