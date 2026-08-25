@@ -293,12 +293,12 @@ def generate_model_sql(entity, attributes):
           is_current = 0, 
           updated_at = GETUTCDATE(), 
           updated_by = 'dbt'
-      WHERE is_current = 1 
+      WHERE is_current = 1
         AND business_key IN (
-          SELECT business_key 
-          FROM {load_table} 
-          WHERE is_processed = 0 
-            AND operation IN ('UPDATE', 'DELETE', 'INSERT')
+          SELECT business_key
+          FROM {load_table}
+          WHERE is_processed = 0
+            AND operation IN ('UPDATE', 'DELETE', 'INSERT', 'UPSERT')
             AND business_key IN (SELECT business_key FROM {master_table} WHERE is_current = 1)
         )
       {{% endif %}}"
