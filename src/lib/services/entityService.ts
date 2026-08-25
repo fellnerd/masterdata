@@ -19,12 +19,34 @@ export interface Entity {
   status: 'draft' | 'active' | 'deprecated'
   scd_type: 'SCD1' | 'SCD2'
   primary_key_attribute: string | null
+  import_source_object?: string | null
+  import_column_mapping?: Record<string, string> | null
+  import_filter?: string | null
+  import_schedule?: string | null
+  import_tracking_column?: string | null
+  last_import_at?: string | null
   created_at: string
   created_by: string
   updated_at: string
   updated_by: string
   // Computed fields
   attribute_count?: number
+}
+
+// import_column_mapping is stored as a JSON string (mds_meta.entity is a
+// plain NVARCHAR column, mssql never parses it) - every route that reads an
+// Entity needs the parsed object, not the raw string, or spreading/indexing
+// it (as the Import Configuration dialog does) silently does the wrong
+// thing instead of erroring: {...'{"a":"b"}'} produces one property per
+// character ({0:'{', 1:'"', ...}) rather than a type error.
+function parseEntityRow<T extends { import_column_mapping?: unknown }>(row: T): T {
+  const raw = row.import_column_mapping
+  if (typeof raw !== 'string') return row
+  try {
+    return { ...row, import_column_mapping: JSON.parse(raw) }
+  } catch {
+    return { ...row, import_column_mapping: null }
+  }
 }
 
 interface AttributeSummary {
@@ -79,7 +101,7 @@ export async function listEntities(modelId?: number): Promise<ServiceResult<Enti
   sql += ` ORDER BY m.name, e.name`
 
   const results = await dbQuery<Entity>(sql, params)
-  return { ok: true, data: results }
+  return { ok: true, data: results.map(parseEntityRow) }
 }
 
 // Matches the internal single-GET's existing shape exactly: bare entity
@@ -98,7 +120,7 @@ export async function getEntity(id: number): Promise<ServiceResult<Entity & { at
     { entityId: id }
   )
 
-  return { ok: true, data: { ...entities[0], attributes } }
+  return { ok: true, data: { ...parseEntityRow(entities[0]), attributes } }
 }
 
 // Resolves a v1 path segment that may be either a numeric entity id or an
