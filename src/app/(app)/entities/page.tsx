@@ -18,6 +18,7 @@ import {
 import { PageLayout } from '@/components/layout/PageLayout'
 import { KpiCard, KpiGrid } from '@/components/ui/KpiCard'
 import { SectionHeader } from '@/components/ui/SectionHeader'
+import { DvColumnPicker } from '@/components/data/DvColumnPicker'
 import { useFilterPersistence } from '@/hooks/useFilterPersistence'
 
 interface Entity {
@@ -735,14 +736,11 @@ function EntitiesPageInner() {
                               </div>
                             </td>
                             <td>
-                              <HTMLSelect
-                                fill
+                              <DvColumnPicker
+                                columns={getSelectedObjectColumns()}
                                 value={importConfig.column_mapping[attr.code] || ''}
-                                onChange={(e) => handleColumnMappingChange(attr.code, e.target.value)}
-                                options={[
-                                  { value: '', label: `-- Auto (${attr.code}) --` },
-                                  ...getSelectedObjectColumns().map(col => ({ value: col, label: col }))
-                                ]}
+                                onChange={(v) => handleColumnMappingChange(attr.code, v)}
+                                placeholder={`-- Auto (${attr.code}) --`}
                               />
                             </td>
                           </tr>
@@ -776,15 +774,12 @@ function EntitiesPageInner() {
                     labelFor="import-tracking-column"
                     helperText={'Optional. If set (e.g. a Satellite\'s "hashdiff"), re-imports only touch rows whose tracking value actually changed - manually enriched fields on unchanged rows are preserved. Left empty: every import fully replaces this entity\'s staged records.'}
                   >
-                    <HTMLSelect
+                    <DvColumnPicker
                       id="import-tracking-column"
-                      fill
+                      columns={getSelectedObjectColumns()}
                       value={importConfig.tracking_column}
-                      onChange={(e) => setImportConfig(prev => ({ ...prev, tracking_column: e.target.value }))}
-                      options={[
-                        { value: '', label: '-- None (full refresh on every import) --' },
-                        ...getSelectedObjectColumns().map(col => ({ value: col, label: col }))
-                      ]}
+                      onChange={(v) => setImportConfig(prev => ({ ...prev, tracking_column: v }))}
+                      placeholder="-- None (full refresh on every import) --"
                     />
                   </FormGroup>
 
