@@ -9,6 +9,10 @@ interface DvColumnPickerProps {
   value: string
   onChange: (value: string) => void
   placeholder: string
+  /** Set when leaving this field empty would NOT actually resolve to a real
+   *  column (see the `unresolved` prop on the caller side) - shows a warning
+   *  style so an unmapped attribute doesn't look silently fine. */
+  warning?: boolean
 }
 
 // Picks a Data Vault column by name, with type-ahead filtering over the
@@ -19,7 +23,7 @@ interface DvColumnPickerProps {
 // after the last "Connect", etc.). Typing a name that isn't in the list
 // offers it as a "use as typed" entry instead of blocking entry to only
 // what was auto-detected.
-export function DvColumnPicker({ id, columns, value, onChange, placeholder }: DvColumnPickerProps) {
+export function DvColumnPicker({ id, columns, value, onChange, placeholder, warning }: DvColumnPickerProps) {
   return (
     <Suggest<string>
       items={columns}
@@ -29,6 +33,8 @@ export function DvColumnPicker({ id, columns, value, onChange, placeholder }: Dv
       inputProps={{
         id,
         placeholder,
+        leftIcon: 'search',
+        intent: warning ? 'warning' : undefined,
         rightElement: value ? (
           <Button icon="cross" minimal small onClick={() => onChange('')} title="Zurücksetzen (Auto)" />
         ) : undefined

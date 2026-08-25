@@ -114,6 +114,7 @@ function EntitiesPageInner() {
   })
   const [isSavingImport, setIsSavingImport] = useState(false)
   const [isImportSourceConnected, setIsImportSourceConnected] = useState(false)
+  const [liveColumns, setLiveColumns] = useState<string[] | null>(null)
 
   // Fetch entities and models from API
   const fetchData = async () => {
@@ -350,6 +351,29 @@ function EntitiesPageInner() {
     const selected = allObjects.find(o => `${o.schema}.${o.name}` === importConfig.source_object)
     return selected?.columns || []
   }
+
+  // The columns above come from a static SQL-file parser (best-effort guess,
+  // can miss or mis-name a column) - once a source object is actually
+  // selected, fetch its real columns from INFORMATION_SCHEMA instead (the
+  // same ground truth dbt's import_from_datavault macro checks against at
+  // import time), so the mapping UI can warn when a mapping genuinely won't
+  // resolve instead of just trusting the static guess.
+  useEffect(() => {
+    if (!isImportOpen || !importConfig.source_object) {
+      setLiveColumns(null)
+      return
+    }
+    let cancelled = false
+    fetch(`/api/settings/import-source/columns?object=${encodeURIComponent(importConfig.source_object)}`)
+      .then(res => (res.ok ? res.json() : Promise.reject()))
+      .then(json => { if (!cancelled) setLiveColumns(json.columns || []) })
+      .catch(() => { if (!cancelled) setLiveColumns(null) })
+    return () => { cancelled = true }
+  }, [isImportOpen, importConfig.source_object])
+
+  // Live columns win when available; the static parse is only a fallback
+  // while the live fetch is in flight (or if it fails).
+  const availableColumns = liveColumns ?? getSelectedObjectColumns()
 
   // Schedule import job for an entity (creates as pending, not immediately executed)
   const handleScheduleImport = async (entity: Entity) => {
@@ -726,25 +750,45 @@ function EntitiesPageInner() {
                         </tr>
                       </thead>
                       <tbody>
-                        {entityAttributes.map((attr) => (
-                          <tr key={attr.id}>
-                            <td>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                {attr.is_business_key && <Icon icon="key" size={12} intent="warning" />}
-                                <span>{attr.name}</span>
-                                <span className="text-muted" style={{ fontSize: 11 }}>({attr.code})</span>
-                              </div>
-                            </td>
-                            <td>
-                              <DvColumnPicker
-                                columns={getSelectedObjectColumns()}
-                                value={importConfig.column_mapping[attr.code] || ''}
-                                onChange={(v) => handleColumnMappingChange(attr.code, v)}
-                                placeholder={`-- Auto (${attr.code}) --`}
-                              />
-                            </td>
-                          </tr>
-                        ))}
+                        {entityAttributes.map((attr) => {
+                          // The attribute's own code is what dbt falls back to sourcing
+                          // from when this mapping is left empty (see
+                          // import_from_datavault.sql: column_mapping.get(attr.code,
+                          // attr.code)) - if that code isn't among the object's real
+                          // columns, "Auto" would silently resolve to nothing (or hard-
+                          // fail the whole import if this is the business key).
+                          const mappedValue = importConfig.column_mapping[attr.code] || ''
+                          const columnsKnown = availableColumns.length > 0
+                          const willAutoResolve = columnsKnown && availableColumns.includes(attr.code)
+                          // Only warn while there's no explicit mapping yet - once the
+                          // user has picked or typed a column, that's authoritative
+                          // regardless of what the attribute's own code would have done.
+                          const needsMapping = !mappedValue && columnsKnown && !willAutoResolve
+                          return (
+                            <tr key={attr.id}>
+                              <td>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  {attr.is_business_key && <Icon icon="key" size={12} intent="warning" />}
+                                  <span>{attr.name}</span>
+                                  <span className="text-muted" style={{ fontSize: 11 }}>({attr.code})</span>
+                                </div>
+                              </td>
+                              <td>
+                                <DvColumnPicker
+                                  columns={availableColumns}
+                                  value={mappedValue}
+                                  onChange={(v) => handleColumnMappingChange(attr.code, v)}
+                                  placeholder={
+                                    needsMapping
+                                      ? `⚠ "${attr.code}" nicht in Quelle gefunden - Spalte wählen/eingeben`
+                                      : `-- Auto (${attr.code}) --`
+                                  }
+                                  warning={needsMapping}
+                                />
+                              </td>
+                            </tr>
+                          )
+                        })}
                         {entityAttributes.length === 0 && (
                           <tr>
                             <td colSpan={2} className="text-muted" style={{ textAlign: 'center', padding: 20 }}>
@@ -776,7 +820,7 @@ function EntitiesPageInner() {
                   >
                     <DvColumnPicker
                       id="import-tracking-column"
-                      columns={getSelectedObjectColumns()}
+                      columns={availableColumns}
                       value={importConfig.tracking_column}
                       onChange={(v) => setImportConfig(prev => ({ ...prev, tracking_column: v }))}
                       placeholder="-- None (full refresh on every import) --"
