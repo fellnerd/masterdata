@@ -91,7 +91,9 @@ needs to issue a fresh token.
 All list endpoints are paginated: `?page=1&pageSize=50` (`pageSize` capped
 at 200 server-side on `stage/records`, `master/{code}`, `views/{code}`),
 response includes `{ data, total, page, pageSize, totalPages }`. `models`
-and `entities` lists are unpaginated (`{ data, total }`).
+and `entities` lists are unpaginated (`{ data, total }`). Both `page` and
+`pageSize` must be positive integers - `0`, negative, or non-numeric values
+return a clean `400` rather than a database error.
 
 ### Models
 
@@ -154,6 +156,7 @@ the entity also returns `400`.
 | data_type | Param(s) | Semantics |
 |---|---|---|
 | string | `attr.<code>=value` | case-insensitive **contains** |
+| string | `attr.<code>.exact=value` | opt-in exact match instead of contains (e.g. dropdown-style filters) |
 | boolean | `attr.<code>=true\|false` | exact match |
 | reference | `attr.<code>=value` | exact match against the referenced business key (**not** contains) |
 | integer / decimal | `attr.<code>.min=`, `attr.<code>.max=` | inclusive range, either or both |
@@ -161,6 +164,7 @@ the entity also returns `400`.
 | datetime | `attr.<code>.from=`, `attr.<code>.to=` | inclusive range, `yyyy-MM-ddTHH:mm[:ss]` |
 
 Example: `GET /api/v1/stage/records?entity_id=7&attr.amount.min=100&attr.active=true`
+Example: `GET /api/v1/stage/records?entity_id=7&attr.status_code.exact=OK` (won't also match `NOK`)
 
 **Known limitation:** a staged value that predates this filter feature (or
 was written by something other than the app's own record forms) may not be

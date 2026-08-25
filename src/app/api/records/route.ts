@@ -3,6 +3,7 @@ import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { validateReferenceAttributes } from '@/lib/validateReferences'
 import { buildRecordFilters } from '@/lib/attributeFilters'
+import { parsePagination } from '@/lib/pagination'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,9 +31,13 @@ export async function GET(request: NextRequest) {
   
   try {
     const { searchParams } = new URL(request.url)
-    const page = parseInt(searchParams.get('page') || '1')
-    const pageSize = parseInt(searchParams.get('pageSize') || '50')
-    const offset = (page - 1) * pageSize
+    // No upper cap here (unlike the v1 API) - this route is only called by
+    // our own UI, which always sends a sane pageSize.
+    const pagination = parsePagination(searchParams, Number.MAX_SAFE_INTEGER)
+    if (!pagination.ok) {
+      return NextResponse.json({ error: pagination.error }, { status: pagination.status })
+    }
+    const { page, pageSize, offset } = pagination
 
     // Build WHERE clause for both count and data queries (entity_id/commit_id/
     // status plus optional attr.* attribute-value filters)

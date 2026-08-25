@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 import { logger } from '@/lib/logger'
 import { query, execute } from '@/lib/db'
+import { parsePagination } from '@/lib/pagination'
 
 // Types
 interface DataRow {
@@ -39,10 +40,12 @@ export async function GET(
   try {
     const { searchParams } = new URL(request.url)
     const status = searchParams.get('status')
-    const page = parseInt(searchParams.get('page') || '1')
-    const pageSize = parseInt(searchParams.get('pageSize') || '50')
     const search = searchParams.get('search')
-    const offset = (page - 1) * pageSize
+    const pagination = parsePagination(searchParams, Number.MAX_SAFE_INTEGER)
+    if (!pagination.ok) {
+      return NextResponse.json({ error: pagination.error }, { status: pagination.status })
+    }
+    const { page, pageSize, offset } = pagination
     
     // Build WHERE clause
     let whereClause = 'WHERE entity_id = @entityId'

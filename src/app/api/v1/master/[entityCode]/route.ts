@@ -3,6 +3,7 @@ import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
 import { resolveEntityId } from '@/lib/services/entityService'
+import { parsePagination } from '@/lib/pagination'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -69,9 +70,11 @@ export async function GET(
   try {
     const businessKey = searchParams.get('business_key')
     const includeHistory = searchParams.get('history') === 'true'
-    const page = parseInt(searchParams.get('page') || '1')
-    const pageSize = Math.min(parseInt(searchParams.get('pageSize') || '50'), 200)
-    const offset = (page - 1) * pageSize
+    const pagination = parsePagination(searchParams)
+    if (!pagination.ok) {
+      return NextResponse.json({ error: pagination.error }, { status: pagination.status })
+    }
+    const { page, pageSize, offset } = pagination
 
     let where = includeHistory ? 'WHERE 1=1' : 'WHERE is_current = 1 AND is_deleted = 0'
     const qparams: Record<string, unknown> = {}

@@ -9,11 +9,11 @@ export type RecordFilterResult =
   | ({ ok: true } & RecordFilterClause)
   | { ok: false; status: number; error: string }
 
-const ATTR_PARAM_RE = /^attr\.([a-zA-Z0-9_]+)(\.(min|max|from|to))?$/
+const ATTR_PARAM_RE = /^attr\.([a-zA-Z0-9_]+)(\.(min|max|from|to|exact))?$/
 
 interface AttrFilter {
   code: string
-  kind: 'eq' | 'min' | 'max' | 'from' | 'to'
+  kind: 'eq' | 'min' | 'max' | 'from' | 'to' | 'exact'
   value: string
 }
 
@@ -25,8 +25,10 @@ interface AttrFilter {
 // value filters: `attr.<code>=value` (equality for boolean/reference,
 // case-insensitive contains for string), `attr.<code>.min=`/`.max=`
 // (numeric range, integer/decimal), `attr.<code>.from=`/`.to=` (date range,
-// date/datetime). entity_id is required whenever any attr.* filter is used,
-// since attribute codes are entity-scoped.
+// date/datetime), `attr.<code>.exact=value` (opt-in exact match instead of
+// contains - only meaningful for string; other types are already exact).
+// entity_id is required whenever any attr.* filter is used, since attribute
+// codes are entity-scoped.
 //
 // Attribute codes can't be bound as SQL parameters (they become part of a
 // JSON_VALUE path string), so every code is validated against
@@ -125,6 +127,11 @@ export async function buildRecordFilters(searchParams: URLSearchParams): Promise
     } else if (dataType === 'reference') {
       // Exact match only - deliberately not "contains" like string, since a
       // reference value is a business key, not free text.
+      whereClause += ` AND ${jsonPath} = @${pName}`
+      params[pName] = filter.value
+    } else if (filter.kind === 'exact') {
+      // attr.<code>.exact= - opt-in exact match for an otherwise "contains"
+      // string attribute (e.g. exact-match dropdown filters).
       whereClause += ` AND ${jsonPath} = @${pName}`
       params[pName] = filter.value
     } else {

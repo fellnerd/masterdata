@@ -44,6 +44,9 @@ interface Entity {
 
 export default function HistoryPage() {
   const [history, setHistory] = useState<HistoryEntry[]>([])
+  // True row count on the server - can exceed history.length, since
+  // /api/history caps the response to the 500 most recent entries.
+  const [historyTotal, setHistoryTotal] = useState(0)
   const [entities, setEntities] = useState<Entity[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -79,8 +82,9 @@ export default function HistoryPage() {
       
       const historyData = await historyRes.json()
       const entitiesData = await entitiesRes.json()
-      
+
       setHistory(historyData)
+      setHistoryTotal(parseInt(historyRes.headers.get('X-Total-Count') || '0') || historyData.length)
       // Entities API returns { data: [], total: n }
       setEntities(entitiesData.data || entitiesData)
     } catch (err) {
@@ -297,6 +301,13 @@ export default function HistoryPage() {
         <Tab id="all" title={`Alle Änderungen (${history.length})`} />
         <Tab id="uncommitted" title={`Nicht committed (${history.filter(h => !h.is_committed).length})`} />
       </Tabs>
+
+      {historyTotal > history.length && (
+        <Callout intent="primary" icon="info-sign" style={{ marginTop: 12 }}>
+          Zeigt die {history.length} neuesten von {historyTotal} Einträgen. Filter/Suche wirken nur
+          innerhalb dieses geladenen Fensters, nicht auf ältere Einträge.
+        </Callout>
+      )}
 
       {/* Data Table */}
       <div className="data-table-container" style={{ marginTop: 16 }}>

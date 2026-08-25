@@ -3,6 +3,7 @@ import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
 import { buildRecordFilters } from '@/lib/attributeFilters'
+import { parsePagination } from '@/lib/pagination'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -33,9 +34,11 @@ export async function GET(request: NextRequest) {
 
   try {
     const { searchParams } = new URL(request.url)
-    const page = parseInt(searchParams.get('page') || '1')
-    const pageSize = Math.min(parseInt(searchParams.get('pageSize') || '50'), 200)
-    const offset = (page - 1) * pageSize
+    const pagination = parsePagination(searchParams)
+    if (!pagination.ok) {
+      return NextResponse.json({ error: pagination.error }, { status: pagination.status })
+    }
+    const { page, pageSize, offset } = pagination
 
     const filterResult = await buildRecordFilters(searchParams)
     if (!filterResult.ok) {

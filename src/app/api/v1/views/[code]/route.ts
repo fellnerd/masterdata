@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
+import { parsePagination } from '@/lib/pagination'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -42,9 +43,11 @@ export async function GET(
 
   try {
     const { searchParams } = new URL(request.url)
-    const page = parseInt(searchParams.get('page') || '1')
-    const pageSize = Math.min(parseInt(searchParams.get('pageSize') || '50'), 200)
-    const offset = (page - 1) * pageSize
+    const pagination = parsePagination(searchParams)
+    if (!pagination.ok) {
+      return NextResponse.json({ error: pagination.error }, { status: pagination.status })
+    }
+    const { page, pageSize, offset } = pagination
 
     const countResult = await dbQuery<{ total: number }>(
       `SELECT COUNT(*) AS total FROM mds_view.[${resolved.table}]`

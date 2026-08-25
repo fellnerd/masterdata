@@ -345,15 +345,20 @@ export default function CommitsPage() {
 
   // State for commit records
   const [commitRecords, setCommitRecords] = useState<Record<number, CommitRecord[]>>({})
+  // total = true row count in the commit (can exceed data.length - the API
+  // caps the preview at 100 rows so a multi-thousand-record commit doesn't
+  // render tens of thousands of Tags and freeze the tab).
+  const [commitRecordsTotal, setCommitRecordsTotal] = useState<Record<number, number>>({})
   const [recordsLoading, setRecordsLoading] = useState<Set<number>>(new Set())
 
   const loadCommitRecords = async (commitId: number) => {
     try {
       setRecordsLoading(prev => new Set(prev).add(commitId))
-      const res = await fetch(`/api/commits/${commitId}/records`)
+      const res = await fetch(`/api/commits/${commitId}/records?limit=100`)
       if (!res.ok) throw new Error('Failed to load records')
       const json = await res.json()
       setCommitRecords(prev => ({ ...prev, [commitId]: json.data || [] }))
+      setCommitRecordsTotal(prev => ({ ...prev, [commitId]: json.total ?? (json.data || []).length }))
     } catch (err) {
       console.error('Failed to load commit records:', err)
     } finally {
@@ -466,17 +471,23 @@ export default function CommitsPage() {
                 <Spinner size={14} /> Loading records...
               </div>
             ) : commitRecords[commit.id] && commitRecords[commit.id].length > 0 ? (
-              <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-                <HTMLTable compact striped style={{ width: '100%', fontSize: 11 }}>
-                  <thead>
-                    <tr>
-                      <th style={{ width: 80 }}>Operation</th>
-                      <th style={{ width: 100 }}>Business Key</th>
-                      <th>Data</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {commitRecords[commit.id].map(record => (
+              <div>
+                {(commitRecordsTotal[commit.id] ?? 0) > commitRecords[commit.id].length && (
+                  <Callout intent="primary" icon="info-sign" style={{ marginBottom: 8, fontSize: 11, padding: '6px 10px' }}>
+                    Showing first {commitRecords[commit.id].length} of {commitRecordsTotal[commit.id]} changed records.
+                  </Callout>
+                )}
+                <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+                  <HTMLTable compact striped style={{ width: '100%', fontSize: 11 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ width: 80 }}>Operation</th>
+                        <th style={{ width: 100 }}>Business Key</th>
+                        <th>Data</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {commitRecords[commit.id].map(record => (
                       <tr key={record.id}>
                         <td>
                           <Tag 
@@ -502,8 +513,9 @@ export default function CommitsPage() {
                         </td>
                       </tr>
                     ))}
-                  </tbody>
-                </HTMLTable>
+                    </tbody>
+                  </HTMLTable>
+                </div>
               </div>
             ) : (
               <div className="text-muted" style={{ fontSize: 12 }}>No records found</div>

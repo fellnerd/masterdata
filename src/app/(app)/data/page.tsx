@@ -19,7 +19,8 @@ import {
   Callout,
   Icon,
   TextArea,
-  Collapse
+  Collapse,
+  Tooltip
 } from '@blueprintjs/core'
 import { DateInput } from '@blueprintjs/datetime'
 import { PageLayout } from '@/components/layout/PageLayout'
@@ -69,6 +70,26 @@ interface Summary {
   draft: number
   validated: number
   invalid: number
+}
+
+// Turns one active `attr.*` filter entry into a short human-readable chip
+// label, e.g. "Amount ≥ 100" or "Status = active". Mirrors the
+// suffix semantics in src/lib/attributeFilters.ts.
+function describeAttributeFilter(paramKey: string, value: string, attrs: Attribute[]): string {
+  const stripped = paramKey.slice('attr.'.length)
+  const match = stripped.match(/^(.+)\.(min|max|from|to|exact)$/)
+  const code = match ? match[1] : stripped
+  const suffix = match ? match[2] : null
+  const label = attrs.find(a => a.code === code)?.name || code
+
+  switch (suffix) {
+    case 'min': return `${label} ≥ ${value}`
+    case 'max': return `${label} ≤ ${value}`
+    case 'from': return `${label} ab ${value}`
+    case 'to': return `${label} bis ${value}`
+    case 'exact': return `${label} = ${value}`
+    default: return `${label}: "${value}"`
+  }
 }
 
 export default function DataEntryPage() {
@@ -612,8 +633,9 @@ function DataEntryPageInner() {
               ]}
             />
             <Button
-              icon="filter"
+              icon="filter-list"
               active={isFilterPanelOpen}
+              intent={Object.values(attributeFilters).some(Boolean) ? 'primary' : 'none'}
               onClick={() => setIsFilterPanelOpen(!isFilterPanelOpen)}
             >
               Filters{Object.values(attributeFilters).filter(Boolean).length > 0 ? ` (${Object.values(attributeFilters).filter(Boolean).length})` : ''}
@@ -641,127 +663,201 @@ function DataEntryPageInner() {
 
       <Collapse isOpen={isFilterPanelOpen}>
         <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-          gap: 12,
           padding: 16,
           marginBottom: 16,
-          border: '1px solid var(--border-color, #d3d8de)',
-          borderRadius: 4
+          background: 'var(--card-bg-secondary, #f5f8fa)',
+          border: '1px solid var(--border-color, #e1e8ed)',
+          borderRadius: 6
         }}>
-          {attributes.map(attr => {
-            const key = `attr.${attr.code}`
-            const update = (patch: Record<string, string>) => {
-              const next = { ...attributeFilters, ...patch }
-              Object.keys(next).forEach(k => { if (!next[k]) delete next[k] })
-              setAttributeFilters(next)
-              setCurrentPage(1)
-            }
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 8,
+            marginBottom: 12
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Icon icon="filter-list" size={14} className="text-muted" />
+              <span style={{ fontWeight: 600, fontSize: 12 }}>Attribute Filters</span>
+              {Object.keys(attributeFilters).length === 0 && (
+                <span className="text-muted" style={{ fontSize: 11 }}>&mdash; keine aktiv</span>
+              )}
+            </div>
+            {Object.keys(attributeFilters).length > 0 && (
+              <Button
+                icon="filter-remove"
+                minimal
+                small
+                onClick={() => { setAttributeFilters({}); setCurrentPage(1) }}
+              >
+                Alle löschen
+              </Button>
+            )}
+          </div>
 
-            if (attr.data_type === 'reference' && attr.reference_entity_id) {
+          {Object.entries(attributeFilters).filter(([, v]) => v).length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
+              {Object.entries(attributeFilters).filter(([, v]) => v).map(([paramKey, value]) => (
+                <Tag
+                  key={paramKey}
+                  minimal
+                  round
+                  onRemove={() => {
+                    const next = { ...attributeFilters }
+                    delete next[paramKey]
+                    setAttributeFilters(next)
+                    setCurrentPage(1)
+                  }}
+                >
+                  {describeAttributeFilter(paramKey, value, attributes)}
+                </Tag>
+              ))}
+            </div>
+          )}
+
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+            gap: 14
+          }}>
+            {attributes.map(attr => {
+              const key = `attr.${attr.code}`
+              const update = (patch: Record<string, string>) => {
+                const next = { ...attributeFilters, ...patch }
+                Object.keys(next).forEach(k => { if (!next[k]) delete next[k] })
+                setAttributeFilters(next)
+                setCurrentPage(1)
+              }
+
+              if (attr.data_type === 'reference' && attr.reference_entity_id) {
+                return (
+                  <FormGroup key={attr.id} label={attr.name} labelFor={`filter-${attr.code}`}>
+                    <ReferenceInput
+                      id={`filter-${attr.code}`}
+                      referencedEntityId={attr.reference_entity_id}
+                      referencedEntityName={attr.reference_entity_code || undefined}
+                      value={attributeFilters[key] ?? ''}
+                      onChange={(v) => update({ [key]: v })}
+                    />
+                  </FormGroup>
+                )
+              }
+
+              if (attr.data_type === 'boolean') {
+                return (
+                  <FormGroup key={attr.id} label={attr.name} labelFor={`filter-${attr.code}`}>
+                    <HTMLSelect
+                      id={`filter-${attr.code}`}
+                      fill
+                      value={attributeFilters[key] ?? ''}
+                      onChange={(e) => update({ [key]: e.target.value })}
+                      options={[
+                        { value: '', label: 'Alle' },
+                        { value: 'true', label: 'True' },
+                        { value: 'false', label: 'False' }
+                      ]}
+                    />
+                  </FormGroup>
+                )
+              }
+
+              if (attr.data_type === 'integer' || attr.data_type === 'decimal') {
+                const minKey = `${key}.min`
+                const maxKey = `${key}.max`
+                return (
+                  <FormGroup key={attr.id} label={attr.name}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <NumericInput
+                        placeholder="Min"
+                        buttonPosition="none"
+                        fill
+                        value={attributeFilters[minKey] ?? ''}
+                        onValueChange={(_n, str) => update({ [minKey]: str })}
+                      />
+                      <span className="text-muted" style={{ fontSize: 11 }}>–</span>
+                      <NumericInput
+                        placeholder="Max"
+                        buttonPosition="none"
+                        fill
+                        value={attributeFilters[maxKey] ?? ''}
+                        onValueChange={(_n, str) => update({ [maxKey]: str })}
+                      />
+                    </div>
+                  </FormGroup>
+                )
+              }
+
+              if (attr.data_type === 'date' || attr.data_type === 'datetime') {
+                const isDatetime = attr.data_type === 'datetime'
+                const fromKey = `${key}.from`
+                const toKey = `${key}.to`
+                const fmt = isDatetime ? "yyyy-MM-dd'T'HH:mm" : 'yyyy-MM-dd'
+                return (
+                  <FormGroup key={attr.id} label={attr.name}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <DateInput
+                        inputProps={{ placeholder: 'Von' }}
+                        value={attributeFilters[fromKey] || null}
+                        dateFnsFormat={fmt}
+                        timePrecision={isDatetime ? 'minute' : undefined}
+                        canClearSelection
+                        onChange={(d) => update({ [fromKey]: d ?? '' })}
+                      />
+                      <span className="text-muted" style={{ fontSize: 11 }}>–</span>
+                      <DateInput
+                        inputProps={{ placeholder: 'Bis' }}
+                        value={attributeFilters[toKey] || null}
+                        dateFnsFormat={fmt}
+                        timePrecision={isDatetime ? 'minute' : undefined}
+                        canClearSelection
+                        onChange={(d) => update({ [toKey]: d ?? '' })}
+                      />
+                    </div>
+                  </FormGroup>
+                )
+              }
+
+              // string - "contains" by default, with an opt-in toggle for an
+              // exact match instead (attr.<code>.exact=, useful for dropdown-
+              // style values where a substring match is too loose).
+              const exactKey = `${key}.exact`
+              const isExact = exactKey in attributeFilters
+              const currentValue = attributeFilters[isExact ? exactKey : key] ?? ''
               return (
                 <FormGroup key={attr.id} label={attr.name} labelFor={`filter-${attr.code}`}>
-                  <ReferenceInput
+                  <InputGroup
                     id={`filter-${attr.code}`}
-                    referencedEntityId={attr.reference_entity_id}
-                    referencedEntityName={attr.reference_entity_code || undefined}
-                    value={attributeFilters[key] ?? ''}
-                    onChange={(v) => update({ [key]: v })}
+                    placeholder={isExact ? 'Exakter Wert...' : 'Enthält...'}
+                    value={currentValue}
+                    onChange={(e) => update({ [isExact ? exactKey : key]: e.target.value })}
+                    rightElement={
+                      <Tooltip
+                        content={isExact ? 'Exakte Übereinstimmung – klicken für "Enthält"' : '"Enthält" – klicken für exakte Übereinstimmung'}
+                        placement="top"
+                      >
+                        <Button
+                          icon={isExact ? 'equals' : 'search'}
+                          minimal
+                          small
+                          active={isExact}
+                          onClick={() => {
+                            const next = { ...attributeFilters }
+                            delete next[key]
+                            delete next[exactKey]
+                            if (currentValue) {
+                              next[isExact ? key : exactKey] = currentValue
+                            }
+                            setAttributeFilters(next)
+                            setCurrentPage(1)
+                          }}
+                        />
+                      </Tooltip>
+                    }
                   />
                 </FormGroup>
               )
-            }
-
-            if (attr.data_type === 'boolean') {
-              return (
-                <FormGroup key={attr.id} label={attr.name} labelFor={`filter-${attr.code}`}>
-                  <HTMLSelect
-                    id={`filter-${attr.code}`}
-                    fill
-                    value={attributeFilters[key] ?? ''}
-                    onChange={(e) => update({ [key]: e.target.value })}
-                    options={[
-                      { value: '', label: 'All' },
-                      { value: 'true', label: 'True' },
-                      { value: 'false', label: 'False' }
-                    ]}
-                  />
-                </FormGroup>
-              )
-            }
-
-            if (attr.data_type === 'integer' || attr.data_type === 'decimal') {
-              const minKey = `${key}.min`
-              const maxKey = `${key}.max`
-              return (
-                <FormGroup key={attr.id} label={attr.name}>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <NumericInput
-                      placeholder="Min"
-                      buttonPosition="none"
-                      value={attributeFilters[minKey] ?? ''}
-                      onValueChange={(_n, str) => update({ [minKey]: str })}
-                    />
-                    <NumericInput
-                      placeholder="Max"
-                      buttonPosition="none"
-                      value={attributeFilters[maxKey] ?? ''}
-                      onValueChange={(_n, str) => update({ [maxKey]: str })}
-                    />
-                  </div>
-                </FormGroup>
-              )
-            }
-
-            if (attr.data_type === 'date' || attr.data_type === 'datetime') {
-              const isDatetime = attr.data_type === 'datetime'
-              const fromKey = `${key}.from`
-              const toKey = `${key}.to`
-              const fmt = isDatetime ? "yyyy-MM-dd'T'HH:mm" : 'yyyy-MM-dd'
-              return (
-                <FormGroup key={attr.id} label={attr.name}>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <DateInput
-                      inputProps={{ placeholder: 'From' }}
-                      value={attributeFilters[fromKey] || null}
-                      dateFnsFormat={fmt}
-                      timePrecision={isDatetime ? 'minute' : undefined}
-                      canClearSelection
-                      onChange={(d) => update({ [fromKey]: d ?? '' })}
-                    />
-                    <DateInput
-                      inputProps={{ placeholder: 'To' }}
-                      value={attributeFilters[toKey] || null}
-                      dateFnsFormat={fmt}
-                      timePrecision={isDatetime ? 'minute' : undefined}
-                      canClearSelection
-                      onChange={(d) => update({ [toKey]: d ?? '' })}
-                    />
-                  </div>
-                </FormGroup>
-              )
-            }
-
-            return (
-              <FormGroup key={attr.id} label={attr.name} labelFor={`filter-${attr.code}`}>
-                <InputGroup
-                  id={`filter-${attr.code}`}
-                  placeholder="Contains..."
-                  value={attributeFilters[key] ?? ''}
-                  onChange={(e) => update({ [key]: e.target.value })}
-                />
-              </FormGroup>
-            )
-          })}
-          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-            <Button
-              icon="filter-remove"
-              minimal
-              disabled={Object.keys(attributeFilters).length === 0}
-              onClick={() => { setAttributeFilters({}); setCurrentPage(1) }}
-            >
-              Clear filters
-            </Button>
+            })}
           </div>
         </div>
       </Collapse>
