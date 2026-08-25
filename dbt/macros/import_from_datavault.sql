@@ -183,10 +183,19 @@ WITH source_rows AS (
 {# JSON payload expression for a brand-new row: '{"attr1":"..","attr2":".."}'.
    Always references the source CTE aliased as `sr` - every query below
    that uses this aliases it that way, so this one expression works
-   everywhere without any string-rewriting. #}
+   everywhere without any string-rewriting.
+
+   sr.val_<code> is wrapped in STRING_ESCAPE(..., 'json') here - free-text
+   source values (e.g. long NL product descriptions) can contain a literal
+   quote, backslash, or control character (embedded newlines are common),
+   which without escaping produces invalid JSON that breaks every reader of
+   mds_stage.staged_record.data, not just this row. Only applied at this
+   plain string-concatenation call site, NOT to the merge_ns.expr below -
+   JSON_MODIFY() encodes its replacement value itself, so escaping sr.val_
+   again there would double-escape it. #}
 {% set json_parts = [] %}
 {% for attr in sourced_attributes %}
-  {% do json_parts.append("'\"" ~ attr.code ~ "\":\"' + sr.val_" ~ attr.code ~ " + '\"'") %}
+  {% do json_parts.append("'\"" ~ attr.code ~ "\":\"' + STRING_ESCAPE(sr.val_" ~ attr.code ~ ", 'json') + '\"'") %}
 {% endfor %}
 {% set new_payload_expr = "'{' + " ~ (json_parts | join(" + ',' + ")) ~ " + '}'" %}
 
