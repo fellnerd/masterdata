@@ -125,7 +125,7 @@ return a clean `400` rather than a database error.
 | PUT | `/api/v1/attributes/{id}` | Partial update, same fields as POST. Admin token required. Returns the full updated attribute. |
 | DELETE | `/api/v1/attributes/{id}` | Admin token required. No dependency checks - deleting an attribute referenced elsewhere (e.g. by staged data) can orphan data, unlike Entity delete. |
 
-### Staging (full CRUD + attribute-value filtering)
+### Staging (full CRUD)
 
 | Method | Path | Notes |
 |---|---|---|
@@ -146,12 +146,18 @@ POST body fields:
   attribute; the server derives it from `data` in that case. Required if not.
 - `data` (required, object) - the record's field values, keyed by attribute code
 
-#### Attribute-value filters (`attr.*`)
+#### Attribute-value filters (`attr.*`) - shared by all three GET read endpoints
 
-Add to any `GET /api/v1/stage/records` call. `entity_id` **must** also be
-present whenever any `attr.*` param is used (attribute codes are
-entity-scoped) - omitting it returns `400`. An unknown attribute code for
-the entity also returns `400`.
+Works the same way on all three GET read endpoints: `GET /api/v1/stage/records`,
+`GET /api/v1/master/{entityCode}`, and `GET /api/v1/views/{code}`. On
+`/stage/records`, `entity_id` **must** also be present whenever any `attr.*`
+param is used (attribute codes are entity-scoped) - omitting it returns
+`400`. On `/master/{entityCode}` and `/views/{code}` the entity is already
+identified by the path, so no extra param is needed there. An unknown
+attribute code for the entity - or any query parameter name the endpoint
+doesn't recognize at all (e.g. `business_key` on `/stage/records`, which
+only exists on `/master/{entityCode}`) - also returns `400` rather than
+being silently ignored.
 
 | data_type | Param(s) | Semantics |
 |---|---|---|
@@ -166,11 +172,13 @@ the entity also returns `400`.
 Example: `GET /api/v1/stage/records?entity_id=7&attr.amount.min=100&attr.active=true`
 Example: `GET /api/v1/stage/records?entity_id=7&attr.status_code.exact=OK` (won't also match `NOK`)
 
-**Known limitation:** a staged value that predates this filter feature (or
-was written by something other than the app's own record forms) may not be
-in a canonical format for `boolean`/`date`/`datetime` attributes - such rows
-are silently excluded from those filters rather than erroring. `string` and
-`reference` filters are unaffected (plain text comparison).
+**Known limitation:** a value that predates this filter feature (or was
+written by something other than the app's own record forms) may not be in a
+canonical format for `boolean`/`date`/`datetime` attributes - such rows are
+silently excluded from those filters rather than erroring, on all three
+endpoints (master/view rows inherit whatever was staged and later
+deployed). `string` and `reference` filters are unaffected (plain text
+comparison).
 
 ### Import (async, scope: stage:write)
 
@@ -186,14 +194,14 @@ import source configured yet, `409` if the code is ambiguous across models.
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/v1/master` | Lists entity codes that have a deployed `mds_master` table |
-| GET | `/api/v1/master/{entityCode}` | `?business_key=&history=true&page=&pageSize=&model_code=`. Without `history=true`, only current non-deleted rows. Same code-ambiguity `409`/`?model_code=` behavior as Entities. `POST`/`PUT`/`PATCH`/`DELETE` all return `405`. |
+| GET | `/api/v1/master/{entityCode}` | `?business_key=&history=true&page=&pageSize=&model_code=` plus optional `attr.*` filters (see "Attribute-value filters" above) - use `business_key` for a fast exact-key lookup, `attr.*` for everything else (e.g. cascading dropdown filters). Without `history=true`, only current non-deleted rows. Same code-ambiguity `409`/`?model_code=` behavior as Entities. `POST`/`PUT`/`PATCH`/`DELETE` all return `405`. |
 
 ### Views (read-only)
 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/v1/views` | Lists deployed, active views |
-| GET | `/api/v1/views/{code}` | `?page=&pageSize=`. Write methods return `405`. |
+| GET | `/api/v1/views/{code}` | `?page=&pageSize=` plus optional `attr.*` filters (see "Attribute-value filters" above), scoped to the view's underlying entity's attributes. Write methods return `405`. |
 
 ## Interactive docs
 
@@ -213,9 +221,12 @@ TOKEN="mds_..."
 # 1. Find the entity you want to stage a record for, and its attribute codes
 curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/entities?model_code=CUSTOMER" | jq
 
-# 2. See what master data already exists
+# 2. See what master data already exists - filter by attribute value directly
+# server-side (no entity_id needed, the path already identifies the entity)
 curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/master" | jq
 curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/master/customer?pageSize=20" | jq
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/v1/master/customer?attr.country.exact=DE&attr.revenue.min=1000000" | jq
 
 # 3. Stage a new record (needs stage:write; entity_id and attribute codes from step 1)
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -253,7 +264,7 @@ field) with a matching HTTP status:
 
 | Status | Meaning |
 |---|---|
-| 400 | Bad request (missing required field, invalid reference value, unknown attribute code in a filter, `attr.*` filter used without `entity_id`, invalid entity code format) |
+| 400 | Bad request (missing required field, invalid reference value, unknown attribute code in a filter, `attr.*` filter used without `entity_id` on `/stage/records`, invalid entity code format, invalid/negative `page`/`pageSize`, or a query parameter name the endpoint doesn't recognize at all) |
 | 401 | Missing/empty/invalid/expired/revoked token |
 | 403 | Token valid but missing the required scope, or (Models/Entities/Attributes writes) the token owner isn't currently admin |
 | 404 | Record/entity/model/attribute/view not found, or entity not yet deployed to master |

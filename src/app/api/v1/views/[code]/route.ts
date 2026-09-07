@@ -3,26 +3,27 @@ import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
 import { parsePagination } from '@/lib/pagination'
+import { buildFlatAttributeFilters, findUnknownQueryParam } from '@/lib/attributeFilters'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const READ_ONLY_MESSAGE = 'mds_view is read-only via the API.'
 
-async function resolveView(code: string): Promise<{ ok: true; table: string } | { ok: false; status: number; error: string }> {
+async function resolveView(code: string): Promise<{ ok: true; table: string; entityId: number } | { ok: false; status: number; error: string }> {
   if (!/^[a-zA-Z0-9_]+$/.test(code)) {
     return { ok: false, status: 400, error: 'Invalid view code' }
   }
 
-  const views = await dbQuery<{ code: string }>(
-    'SELECT code FROM mds_meta.entity_view WHERE code = @code AND is_deployed = 1 AND is_active = 1',
+  const views = await dbQuery<{ code: string; entity_id: number }>(
+    'SELECT code, entity_id FROM mds_meta.entity_view WHERE code = @code AND is_deployed = 1 AND is_active = 1',
     { code }
   )
   if (views.length === 0) {
     return { ok: false, status: 404, error: `Unknown or undeployed view: ${code}` }
   }
 
-  return { ok: true, table: views[0].code.toLowerCase() }
+  return { ok: true, table: views[0].code.toLowerCase(), entityId: views[0].entity_id }
 }
 
 // GET /api/v1/views/[code] - Read-only view data (scope: views:read)
@@ -43,22 +44,35 @@ export async function GET(
 
   try {
     const { searchParams } = new URL(request.url)
+
+    const unknownParam = findUnknownQueryParam(searchParams, ['page', 'pageSize'])
+    if (unknownParam) {
+      return NextResponse.json({ error: `Unknown query parameter: ${unknownParam}` }, { status: 400 })
+    }
+
     const pagination = parsePagination(searchParams)
     if (!pagination.ok) {
       return NextResponse.json({ error: pagination.error }, { status: pagination.status })
     }
     const { page, pageSize, offset } = pagination
 
+    const filterResult = await buildFlatAttributeFilters(resolved.entityId, searchParams)
+    if (!filterResult.ok) {
+      return NextResponse.json({ error: filterResult.error }, { status: filterResult.status })
+    }
+    const where = `WHERE 1=1${filterResult.whereClause}`
+
     const countResult = await dbQuery<{ total: number }>(
-      `SELECT COUNT(*) AS total FROM mds_view.[${resolved.table}]`
+      `SELECT COUNT(*) AS total FROM mds_view.[${resolved.table}] ${where}`,
+      filterResult.params
     )
     const total = countResult[0]?.total || 0
 
     const data = await dbQuery<Record<string, unknown>>(
-      `SELECT * FROM mds_view.[${resolved.table}]
+      `SELECT * FROM mds_view.[${resolved.table}] ${where}
        ORDER BY (SELECT NULL)
        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
-      { offset, pageSize }
+      { ...filterResult.params, offset, pageSize }
     )
 
     return NextResponse.json({ data, total, page, pageSize, totalPages: Math.ceil(total / pageSize) })

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
-import { buildRecordFilters } from '@/lib/attributeFilters'
+import { buildRecordFilters, findUnknownQueryParam } from '@/lib/attributeFilters'
 import { parsePagination } from '@/lib/pagination'
 
 export const runtime = 'nodejs'
@@ -34,6 +34,12 @@ export async function GET(request: NextRequest) {
 
   try {
     const { searchParams } = new URL(request.url)
+
+    const unknownParam = findUnknownQueryParam(searchParams, ['entity_id', 'commit_id', 'status', 'page', 'pageSize'])
+    if (unknownParam) {
+      return NextResponse.json({ error: `Unknown query parameter: ${unknownParam}` }, { status: 400 })
+    }
+
     const pagination = parsePagination(searchParams)
     if (!pagination.ok) {
       return NextResponse.json({ error: pagination.error }, { status: pagination.status })

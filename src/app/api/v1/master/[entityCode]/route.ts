@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
 import { resolveEntityId } from '@/lib/services/entityService'
 import { parsePagination } from '@/lib/pagination'
+import { buildFlatAttributeFilters, findUnknownQueryParam } from '@/lib/attributeFilters'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -68,6 +69,11 @@ export async function GET(
   }
 
   try {
+    const unknownParam = findUnknownQueryParam(searchParams, ['business_key', 'history', 'page', 'pageSize', 'model_code'])
+    if (unknownParam) {
+      return NextResponse.json({ error: `Unknown query parameter: ${unknownParam}` }, { status: 400 })
+    }
+
     const businessKey = searchParams.get('business_key')
     const includeHistory = searchParams.get('history') === 'true'
     const pagination = parsePagination(searchParams)
@@ -82,6 +88,13 @@ export async function GET(
       where += ' AND business_key = @businessKey'
       qparams.businessKey = businessKey
     }
+
+    const filterResult = await buildFlatAttributeFilters(resolved.entity.id, searchParams)
+    if (!filterResult.ok) {
+      return NextResponse.json({ error: filterResult.error }, { status: filterResult.status })
+    }
+    where += filterResult.whereClause
+    Object.assign(qparams, filterResult.params)
 
     const countResult = await dbQuery<{ total: number }>(
       `SELECT COUNT(*) AS total FROM mds_master.[${resolved.table}] ${where}`,

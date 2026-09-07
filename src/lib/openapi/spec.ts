@@ -117,17 +117,22 @@ export const openApiSpec = {
         in: 'query',
         required: false,
         description:
-          'Attribute-value filters, one per attribute code. `entity_id` is required whenever any `attr.*` ' +
-          'param is used. Operator depends on the attribute\'s data_type:\n\n' +
-          '- **string**: `attr.<code>=value` - case-insensitive contains\n' +
+          'Attribute-value filters, one per attribute code. On `/stage/records`, `entity_id` is required ' +
+          'whenever any `attr.*` param is used (attribute codes are entity-scoped there); on `/master/{entityCode}` ' +
+          'and `/views/{code}` the entity is already identified by the path, so no extra param is needed. ' +
+          'Operator depends on the attribute\'s data_type:\n\n' +
+          '- **string**: `attr.<code>=value` - case-insensitive contains; `attr.<code>.exact=value` - opt-in ' +
+          'exact match instead (e.g. dropdown-style filters)\n' +
           '- **boolean**: `attr.<code>=true|false` - exact match\n' +
           '- **reference**: `attr.<code>=value` - exact match against the referenced business key (not contains)\n' +
           '- **integer / decimal**: `attr.<code>.min=`, `attr.<code>.max=` - inclusive range (either or both)\n' +
           '- **date / datetime**: `attr.<code>.from=`, `attr.<code>.to=` - inclusive range (either or both). ' +
           'datetime values use `yyyy-MM-ddTHH:mm[:ss]`.\n\n' +
-          'Unknown attribute codes return 400. Values stored before this filter feature shipped (or entered ' +
-          'outside the app\'s own forms) may not be in a canonical format for boolean/date/datetime attributes - ' +
-          'such rows are silently excluded from those filters rather than erroring.',
+          'Unknown attribute codes return 400, as does any query parameter name this endpoint doesn\'t ' +
+          'recognize (a typo\'d or endpoint-mismatched param is rejected rather than silently ignored). Values ' +
+          'stored before this filter feature shipped (or entered outside the app\'s own forms) may not be in a ' +
+          'canonical format for boolean/date/datetime attributes - such rows are silently excluded from those ' +
+          'filters rather than erroring.',
         schema: { type: 'string' },
         style: 'form',
       },
@@ -458,7 +463,7 @@ export const openApiSpec = {
     '/stage/records': {
       get: {
         summary: 'List staged records',
-        description: 'Filter by `entity_id`, `commit_id`, `status`, and/or attribute-value filters (see `attr.<code>` below). Paginated, `pageSize` capped at 200.',
+        description: 'Filter by `entity_id`, `commit_id`, `status`, and/or attribute-value filters (see `attr.<code>` below). Paginated, `pageSize` capped at 200. Any other query parameter name (e.g. `business_key`, which only exists on `/master/{entityCode}`) is rejected with 400 rather than silently ignored.',
         tags: ['Staging'],
         security: [{ bearerAuth: ['stage:read'] }],
         parameters: [
@@ -474,7 +479,7 @@ export const openApiSpec = {
             description: 'OK',
             content: { 'application/json': { schema: { type: 'object', properties: { data: { type: 'array', items: { $ref: '#/components/schemas/StagedRecord' } }, total: { type: 'integer' }, page: { type: 'integer' }, pageSize: { type: 'integer' }, totalPages: { type: 'integer' } } } } },
           },
-          400: { description: 'entity_id missing for attr.* filter, or unknown attribute code', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          400: { description: 'entity_id missing for attr.* filter, unknown attribute code, unknown query parameter, or invalid page/pageSize', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },
       post: {
@@ -561,6 +566,7 @@ export const openApiSpec = {
       ],
       get: {
         summary: 'Read deployed master data rows (read-only)',
+        description: 'Supports attribute-value filters (see `attr.<code>` below) alongside `business_key` - `business_key` stays the fast/simple path for an exact-key lookup, `attr.*` covers everything else (e.g. cascading dropdown filters over `field_of_application`/`classification_system`/`classification`).',
         tags: ['Master Data'],
         security: [{ bearerAuth: ['master:read'] }],
         parameters: [
@@ -568,9 +574,11 @@ export const openApiSpec = {
           { name: 'history', in: 'query', schema: { type: 'boolean', default: false }, description: 'Include historized/deleted rows' },
           { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
           { name: 'pageSize', in: 'query', schema: { type: 'integer', default: 50, maximum: 200 } },
+          { $ref: '#/components/parameters/AttrFilters' },
         ],
         responses: {
           200: { description: 'OK' },
+          400: { description: 'Unknown attribute code, unknown query parameter, or invalid page/pageSize', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           404: { description: 'Unknown entity or not yet deployed', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           409: { description: 'Ambiguous code across models - add model_code', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
@@ -592,13 +600,19 @@ export const openApiSpec = {
       parameters: [{ name: 'code', in: 'path', required: true, schema: { type: 'string' } }],
       get: {
         summary: 'Read view rows (read-only)',
+        description: 'Supports attribute-value filters (see `attr.<code>` below), scoped to the view\'s underlying entity\'s attributes.',
         tags: ['Views'],
         security: [{ bearerAuth: ['views:read'] }],
         parameters: [
           { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
           { name: 'pageSize', in: 'query', schema: { type: 'integer', default: 50, maximum: 200 } },
+          { $ref: '#/components/parameters/AttrFilters' },
         ],
-        responses: { 200: { description: 'OK' }, 404: { description: 'Unknown view', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } } },
+        responses: {
+          200: { description: 'OK' },
+          400: { description: 'Unknown attribute code, unknown query parameter, or invalid page/pageSize', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          404: { description: 'Unknown view', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+        },
       },
       post: { summary: 'Not allowed - read-only', tags: ['Views'], responses: { 405: { description: 'mds_view is read-only via the API' } } },
       put: { summary: 'Not allowed - read-only', tags: ['Views'], responses: { 405: { description: 'mds_view is read-only via the API' } } },
