@@ -142,8 +142,16 @@ referenced entity's staged records, or the request is rejected with `400`.
 POST body fields:
 - `entity_id` (required, number) - which entity this record belongs to
 - `operation` - `"INSERT"` (default), `"UPDATE"`, or `"DELETE"`
-- `business_key` - optional if the entity has a designated business-key
-  attribute; the server derives it from `data` in that case. Required if not.
+- `business_key` - optional if the entity has designated business-key
+  attribute(s); the server derives it from `data` in that case. Required if
+  not. If the entity has **more than one** business-key attribute, the
+  derived key joins each attribute's value with `|`, in `sort_order` (e.g.
+  `code1=AAA` + `code2=BBB` -> `AAA|BBB`) - same convention as a Data Vault
+  import uses. All business-key attributes must have a value in `data` for
+  auto-derivation to work; if any is missing, this returns `400` naming
+  every attribute code the key needs. Editing a record's `data` afterward
+  (`PUT`) re-derives and updates `business_key` the same way if any of those
+  values changed.
 - `data` (required, object) - the record's field values, keyed by attribute code
 
 #### Attribute-value filters (`attr.*`) - shared by all three GET read endpoints

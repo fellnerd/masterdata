@@ -496,7 +496,7 @@ export const openApiSpec = {
                 properties: {
                   entity_id: { type: 'integer' },
                   operation: { type: 'string', enum: ['INSERT', 'UPDATE', 'DELETE'], default: 'INSERT' },
-                  business_key: { type: 'string', description: 'Optional - derived from data using the entity\'s business-key attribute if omitted' },
+                  business_key: { type: 'string', description: 'Optional - derived from `data` using the entity\'s business-key attribute(s) if omitted. With more than one business-key attribute, the derived value joins each one with `|` in sort_order (e.g. `AAA|BBB`), same as a Data Vault import; all of them must have a value in `data` or this returns 400.' },
                   data: { type: 'object', additionalProperties: true },
                 },
               },

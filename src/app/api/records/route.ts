@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger'
 import { validateReferenceAttributes } from '@/lib/validateReferences'
 import { buildRecordFilters } from '@/lib/attributeFilters'
 import { parsePagination } from '@/lib/pagination'
+import { getBusinessKeyAttributeCodes, deriveBusinessKey } from '@/lib/businessKey'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -156,23 +157,23 @@ export async function POST(request: NextRequest) {
       )
     }
     
-    // Get business key attribute for this entity
-    const bkAttribute = await dbQuery<{ code: string }>(
-      `SELECT code FROM [mds_meta].[attribute] 
-       WHERE entity_id = @entityId AND is_business_key = 1`,
-      { entityId: entity_id }
-    )
-    
-    // Extract business_key from data if not provided
+    // Get business key attribute(s) for this entity
+    const bkCodes = await getBusinessKeyAttributeCodes(entity_id)
+
+    // Extract business_key from data if not provided - joins multiple
+    // business-key attributes with '|', same as a Data Vault import would.
     let business_key = providedBusinessKey
-    if (!business_key && bkAttribute.length > 0) {
-      const bkCode = bkAttribute[0].code
-      business_key = data[bkCode]
+    if (!business_key && bkCodes.length > 0) {
+      business_key = deriveBusinessKey(bkCodes, data)
     }
-    
+
     if (!business_key) {
       return NextResponse.json(
-        { error: 'business_key is required (either directly or in data with a business key attribute)' },
+        {
+          error: bkCodes.length > 1
+            ? `business_key is required (either directly, or in data with all business-key attributes present: ${bkCodes.join(', ')})`
+            : 'business_key is required (either directly or in data with a business key attribute)'
+        },
         { status: 400 }
       )
     }

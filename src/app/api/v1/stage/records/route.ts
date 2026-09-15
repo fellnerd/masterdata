@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
 import { buildRecordFilters, findUnknownQueryParam } from '@/lib/attributeFilters'
 import { parsePagination } from '@/lib/pagination'
+import { getBusinessKeyAttributeCodes, deriveBusinessKey } from '@/lib/businessKey'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -110,20 +111,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Entity not found' }, { status: 404 })
     }
 
-    const bkAttribute = await dbQuery<{ code: string }>(
-      'SELECT code FROM mds_meta.attribute WHERE entity_id = @entityId AND is_business_key = 1',
-      { entityId: entity_id }
-    )
+    const bkCodes = await getBusinessKeyAttributeCodes(entity_id)
 
+    // Joins multiple business-key attributes with '|', same as a Data Vault
+    // import would (see import_from_datavault.sql's bk_concat).
     let business_key = providedBusinessKey
-    if (business_key === undefined && bkAttribute.length > 0) {
-      business_key = data[bkAttribute[0].code]
+    if (business_key === undefined && bkCodes.length > 0) {
+      business_key = deriveBusinessKey(bkCodes, data)
     }
     // Falsy-but-valid values (0, false) must not be treated as "missing" -
     // check explicitly for absence instead of `!business_key`.
     if (business_key === undefined || business_key === null || business_key === '') {
       return NextResponse.json(
-        { error: 'business_key is required (either directly or in data with a business key attribute)' },
+        {
+          error: bkCodes.length > 1
+            ? `business_key is required (either directly, or in data with all business-key attributes present: ${bkCodes.join(', ')})`
+            : 'business_key is required (either directly or in data with a business key attribute)'
+        },
         { status: 400 }
       )
     }

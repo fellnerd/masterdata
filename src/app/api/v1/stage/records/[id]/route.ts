@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
+import { getBusinessKeyAttributeCodes, deriveBusinessKey } from '@/lib/businessKey'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -94,22 +95,16 @@ export async function PUT(
       updates.push('payload = @data')
       queryParams.data = dataJson
 
-      const attributes = await dbQuery<{ code: string }>(
-        'SELECT code FROM mds_meta.attribute WHERE entity_id = @entityId AND is_business_key = 1',
-        { entityId: current.entity_id }
-      )
-      if (attributes.length > 0) {
-        const newBusinessKey = data[attributes[0].code]
+      const bkCodes = await getBusinessKeyAttributeCodes(current.entity_id)
+      if (bkCodes.length > 0) {
+        const newBusinessKey = deriveBusinessKey(bkCodes, data)
         // Falsy-but-valid values (0, false) must not be treated as "no
-        // change" - check explicitly for absence instead of `newBusinessKey && ...`.
-        if (
-          newBusinessKey !== undefined &&
-          newBusinessKey !== null &&
-          String(newBusinessKey) !== current.business_key
-        ) {
+        // change" - deriveBusinessKey only returns undefined when a
+        // component is genuinely missing.
+        if (newBusinessKey !== undefined && newBusinessKey !== current.business_key) {
           updates.push('business_key = @businessKey')
           updates.push("business_key_hash = CONVERT(CHAR(64), HASHBYTES('SHA2_256', @businessKey), 2)")
-          queryParams.businessKey = String(newBusinessKey)
+          queryParams.businessKey = newBusinessKey
         }
       }
     }

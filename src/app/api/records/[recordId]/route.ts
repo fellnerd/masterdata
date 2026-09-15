@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { validateReferenceAttributes } from '@/lib/validateReferences'
+import { getBusinessKeyAttributeCodes, deriveBusinessKey } from '@/lib/businessKey'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -116,21 +117,16 @@ export async function PUT(
       updates.push('payload = @data')
       queryParams.data = dataJson
       
-      // Update business_key if it's in the data
-      const attributes = await dbQuery<{ code: string; is_business_key: boolean }>(
-        `SELECT a.code, a.is_business_key 
-         FROM mds_meta.attribute a
-         WHERE a.entity_id = @entityId AND a.is_business_key = 1`,
-        { entityId: current.entity_id }
-      )
-      
-      if (attributes.length > 0) {
-        const bkAttr = attributes[0]
-        const newBusinessKey = data[bkAttr.code]
-        if (newBusinessKey && newBusinessKey !== current.business_key) {
+      // Update business_key if it changed - joins multiple business-key
+      // attributes with '|', same as create and as a Data Vault import would.
+      const bkCodes = await getBusinessKeyAttributeCodes(current.entity_id)
+
+      if (bkCodes.length > 0) {
+        const newBusinessKey = deriveBusinessKey(bkCodes, data)
+        if (newBusinessKey !== undefined && newBusinessKey !== current.business_key) {
           updates.push('business_key = @businessKey')
           updates.push('business_key_hash = CONVERT(CHAR(64), HASHBYTES(\'SHA2_256\', @businessKey), 2)')
-          queryParams.businessKey = String(newBusinessKey)
+          queryParams.businessKey = newBusinessKey
         }
       }
     }

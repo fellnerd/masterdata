@@ -242,7 +242,11 @@ function DataEntryPageInner() {
   const filteredRecords = records.filter(r => !filterStatus || r.validation_status?.toLowerCase() === filterStatus.toLowerCase())
 
   const selectedEntity = entities.find(e => e.id === selectedEntityId)
-  const businessKeyAttr = attributes.find(a => a.is_business_key)
+  // Ordered by sort_order (see listAttributes in attributeService.ts) - a
+  // composite business key joins these with '|' server-side, in this same
+  // order, matching how a Data Vault import builds one (bk_concat in
+  // import_from_datavault.sql).
+  const businessKeyAttrs = attributes.filter(a => a.is_business_key)
 
   // Shared field control for the Add/Edit Record forms, dispatched by
   // data_type so stored values are canonical (JSON boolean/number, ISO date)
@@ -333,19 +337,19 @@ function DataEntryPageInner() {
   }
 
   const handleCreate = async () => {
-    if (!selectedEntityId || !businessKeyAttr) return
-    
+    if (!selectedEntityId || businessKeyAttrs.length === 0) return
+
     try {
       setIsCreating(true)
-      const businessKey = String(newRecord[businessKeyAttr.code] || '')
-      
+      // business_key is left for the server to derive from `data` (joins
+      // all business-key attributes with '|' if there's more than one) -
+      // one source of truth for that logic instead of duplicating it here.
       const res = await fetch('/api/records', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           entity_id: selectedEntityId,
           operation: 'INSERT',
-          business_key: businessKey,
           data: newRecord
         })
       })
@@ -1060,7 +1064,7 @@ function DataEntryPageInner() {
               intent="primary" 
               onClick={handleCreate}
               loading={isCreating}
-              disabled={!businessKeyAttr || !newRecord[businessKeyAttr.code]}
+              disabled={businessKeyAttrs.length === 0 || businessKeyAttrs.some(a => !newRecord[a.code])}
             >
               Add Record
             </Button>
