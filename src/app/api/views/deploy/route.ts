@@ -246,9 +246,11 @@ ${view.custom_sql}`
   let whereClause = ''
   
   if (view.view_type === 'scd1') {
-    // Only current records
+    // Only current, non-deleted records - a DELETE produces a new
+    // is_current=1 row (the tombstone, is_deleted=1) rather than removing
+    // the old one, so is_current alone isn't enough to mean "still exists".
     if (sourceSchema === 'mds_master') {
-      whereClause = 'WHERE is_current = 1'
+      whereClause = 'WHERE is_current = 1 AND is_deleted = 0'
     } else {
       // For load table, get latest by business_key
       whereClause = `WHERE load_id IN (
