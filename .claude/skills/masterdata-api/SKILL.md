@@ -1,6 +1,6 @@
 ---
 name: masterdata-api
-description: Read and write data on a running Master Data Services (MDS) instance via its token-authenticated REST API (/api/v1/*) - discover/create/edit/delete models/entities/attributes, list/create/edit/delete staged records with attribute-value filtering, and read (read-only) deployed master data and views. Use whenever the user wants to interact with data on a masterdata deployment programmatically instead of through the web UI.
+description: Read and write data on a running Master Data Services (MDS) instance via its token-authenticated REST API (/api/v1/*) - discover/create/edit/delete models/entities/attributes, list/create/edit/delete staged records with attribute-value filtering, and read (read-only) deployed master data and views (with field selection to shrink payloads and unique-value lists for building cascading dropdown filters). Use whenever the user wants to interact with data on a masterdata deployment programmatically instead of through the web UI.
 ---
 
 # masterdata REST API
@@ -40,8 +40,10 @@ Authorization: Bearer mds_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 **Can:** full CRUD on Models, Entities, and Attributes (schema/metadata -
 admin token required for writes, see Scopes below); full CRUD on staging
 (`mds_stage.staged_record` - data not yet live) including attribute-value
-filtering; read-only access to deployed master data and views; triggering
-an async Data Vault import for an entity that already has one configured.
+filtering; read-only access to deployed master data and views, optionally
+trimmed to chosen fields or reduced to the unique values of one field (dropdown
+filters); triggering an async Data Vault import for an entity that already has
+one configured.
 
 **Can't:** commit staged records into a commit, or trigger a deploy that
 moves staged data into master. Those actions (`/api/commits`, `/api/deploy`)
@@ -89,7 +91,8 @@ needs to issue a fresh token.
 ## Endpoints
 
 All list endpoints are paginated: `?page=1&pageSize=50` (`pageSize` capped
-at 200 server-side on `stage/records`, `master/{code}`, `views/{code}`),
+at 200 server-side on `stage/records`, `master/{code}`, `views/{code}` - 1000
+when using `distinct`, see "Response shaping"),
 response includes `{ data, total, page, pageSize, totalPages }`. `models`
 and `entities` lists are unpaginated (`{ data, total }`). Both `page` and
 `pageSize` must be positive integers - `0`, negative, or non-numeric values
@@ -109,8 +112,8 @@ return a clean `400` rather than a database error.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/v1/entities` | Filter with `?model_id=` or `?model_code=`. Each entity includes an embedded `attributes` array (`code`, `name`, `data_type`, `max_length`, `is_required`, `is_business_key`) - this is how you find what to put in `data` when staging a record. Entities also carry `is_deployed` (their `mds_master` table exists), `last_deployed_at` (newest deployed commit/schema deployment) and `record_count` (current, non-deleted master rows; `null` if not deployed) - derived live, not stored fields. |
-| POST | `/api/v1/entities` | Body: `{ model_id, code, name, description?, scd_type? }` (`scd_type`: `SCD1`/`SCD2`, default `SCD2`). Admin token required. |
+| GET | `/api/v1/entities` | Filter with `?model_id=` or `?model_code=`. Each entity includes an embedded `attributes` array (`code`, `name`, `data_type`, `max_length`, `is_required`, `is_business_key`) - this is how you find what to put in `data` when staging a record. Entities also carry `is_deployed` (their `mds_master` table exists), `last_deployed_at` (newest deployed commit/schema deployment) and `record_count` (current, non-deleted master rows; `null` if not deployed) - derived live, not stored fields - but only on the single-entity `GET /api/v1/entities/{code}`, not in this list. |
+| POST | `/api/v1/entities` | Body: `{ model_id, code, name, description?, scd_type? }` (`scd_type`: `SCD1`/`SCD2`, default `SCD2` - **SCD1** keeps exactly one row per business key in `mds_master` (an update overwrites it, a delete removes it: no history, no tombstones); **SCD2** keeps history rows and delete tombstones, readable with `?history=true`). The generated master model follows `scd_type` after the next "Deploy Schema". Admin token required. |
 | GET | `/api/v1/entities/{code}` | `{code}` accepts either the numeric entity id or its code. **`entity.code` is only unique per-model, not globally** - if the same code exists in more than one model, this returns `409`; add `?model_code=` to disambiguate. |
 | PUT | `/api/v1/entities/{code}` | Body: `{ name?, description?, scd_type?, status? }`. Admin token required. Same `?model_code=` disambiguation as GET. Returns the full updated entity. |
 | DELETE | `/api/v1/entities/{code}` | Admin token required. Same `?model_code=` disambiguation. Blocks (`400`) only on genuinely outstanding work - attributes still defined on it, uncommitted staged records, or commits still in flight (draft/pending/approved). Terminal history (deployed/rejected commits, already-loaded staged records) is cleaned up automatically as part of the delete. **Does not** touch the physical dbt-generated `mds_master`/`mds_load` tables for the entity - those may still hold historized data after this call. |
@@ -129,7 +132,7 @@ return a clean `400` rather than a database error.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/v1/stage/records` | Filter with `?entity_id=&commit_id=&status=` plus optional `attr.*` filters (see below) |
+| GET | `/api/v1/stage/records` | Filter with `?entity_id=&commit_id=&status=` plus optional `attr.*` filters (see below); shape the response with `fields` / `distinct` (see "Response shaping") |
 | POST | `/api/v1/stage/records` | Body: `{ entity_id, operation?, business_key?, data }` - see below |
 | GET | `/api/v1/stage/records/{id}` | Single record |
 | PUT | `/api/v1/stage/records/{id}` | Body: `{ data?, operation? }` - partial update. If the record has already been through a commit, this resets it to `operation=UPDATE`/`status=pending` rather than silently changing already-committed data - it needs a new commit afterward. |
@@ -188,6 +191,78 @@ endpoints (master/view rows inherit whatever was staged and later
 deployed). `string` and `reference` filters are unaffected (plain text
 comparison).
 
+#### Response shaping (`fields`, `distinct`) - shared by all three GET read endpoints
+
+Two optional parameters on `GET /api/v1/stage/records`,
+`GET /api/v1/master/{entityCode}` and `GET /api/v1/views/{code}`. They combine
+with every filter above (`attr.*`, `business_key`, `status`, ...) and with
+pagination.
+
+**`fields=a,b,c` - only return these fields.** For models with many
+attributes, ask for just what you render instead of every column of every row:
+
+```
+GET /api/v1/master/customer?fields=code,name,country&pageSize=200
+-> { "data": [ { "code": "ACME", "name": "Acme Corp", "country": "DE" }, ... ], "total": ..., ... }
+```
+
+- Each row contains exactly those fields, in the order given; `total` and
+  pagination don't change. Names are case-insensitive, repeats are ignored.
+- `master` / `views`: any real column of the table/view - attribute codes plus
+  `business_key`, `business_key_hash`, `valid_from`, `valid_to`, `is_current`,
+  `is_deleted`, ... Values keep their declared type as usual.
+- `stage/records`: `fields` is a list of **attribute codes** and trims the
+  keys of `data` / `previous_data`; the record envelope (`id`, `status`,
+  `business_key`, ...) is always returned whole. Needs `entity_id`.
+- An unknown field is a `400` (`Unknown field: x`) - not silently dropped.
+
+**`distinct=<field>` - the unique values of one field**, instead of rows. This
+is what you want to populate a dropdown, and - combined with `attr.*` filters -
+a **cascading / lazy-loaded filter hierarchy** where each level only loads once
+its parent is chosen, without downloading a single full row:
+
+```
+# level 1: all fields of application
+GET /api/v1/master/epd_export_groups?distinct=field_of_application
+-> { "entity": {...}, "field": "field_of_application",
+     "data": ["bu", "bu-en-gww", "gww", "proces"],
+     "total": 4, "page": 1, "pageSize": 50, "totalPages": 1 }
+
+# level 2: classification systems that exist within the chosen field of application
+GET /api/v1/master/epd_export_groups?distinct=classification_system&attr.field_of_application.exact=bu
+
+# level 3: classifications within both parents
+GET /api/v1/master/epd_export_groups?distinct=classification&attr.field_of_application.exact=bu&attr.classification_system.exact=nlsfb
+
+# typeahead inside a level: plain (contains) filter on the same field
+GET /api/v1/master/epd_export_groups?distinct=classification&attr.classification=fund&pageSize=20
+```
+
+- `data` is a flat array of values (not objects), sorted ascending - numerically
+  for `integer`/`decimal`, so `2` comes before `10`. `field` echoes the field;
+  `total` is the number of **distinct values**, not rows.
+- **NULLs are left out**, and text is compared **case-insensitively** by the
+  database (`Abc` and `abc` are one value; which spelling you get back is not
+  specified). For `integer`/`decimal`/`boolean`/`date`/`datetime` a value that
+  is blank or doesn't parse as its declared type is ignored too; an empty string
+  in a *text* attribute is a value like any other and is returned as `""`.
+- Numbers come back as JSON numbers, booleans as booleans, `date` as
+  `yyyy-MM-dd`, `datetime` as an ISO timestamp - same typing as rows. (A view
+  deployed before typed views existed still has text columns, so its numbers
+  come back as strings, sorted as text, until it's redeployed.)
+- Paginated like everything else (`page`, `pageSize`), but `pageSize` may go up
+  to **1000** because the values are tiny. Use `totalPages` to know when to stop.
+- Without `history=true`, `master` looks at current, non-deleted rows only
+  (so a value that only survives in history isn't offered). `stage/records`
+  needs `entity_id` and covers every status unless you pass `status=`.
+- Use `.exact` on the parent filters (string attributes default to
+  *contains*, which would also match `bu-en-gww` when you meant `bu`).
+
+Rules for both: `fields` and `distinct` can't be used together (`400`);
+`distinct` takes exactly one field (`400` for a list); an empty value or an
+unknown field is a `400`; on `/stage/records` both need `entity_id` (`400`
+without it).
+
 ### Import (async, scope: stage:write)
 
 | Method | Path | Notes |
@@ -209,14 +284,14 @@ offending keys listed.)
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/v1/master` | Lists entity codes that have a deployed `mds_master` table |
-| GET | `/api/v1/master/{entityCode}` | `?business_key=&history=true&page=&pageSize=&model_code=` plus optional `attr.*` filters (see "Attribute-value filters" above) - use `business_key` for a fast exact-key lookup, `attr.*` for everything else (e.g. cascading dropdown filters). Without `history=true`, only current non-deleted rows. Attribute values come back in their **declared type** (`integer`/`decimal` as JSON numbers, `boolean` as booleans, empty as `null`) even though `mds_master` stores them as text; a value that doesn't parse as its declared type is returned as stored. Same code-ambiguity `409`/`?model_code=` behavior as Entities. `POST`/`PUT`/`PATCH`/`DELETE` all return `405`. |
+| GET | `/api/v1/master/{entityCode}` | `?business_key=&history=true&page=&pageSize=&model_code=&fields=&distinct=` plus optional `attr.*` filters (see "Attribute-value filters" and "Response shaping" above) - use `business_key` for a fast exact-key lookup, `attr.*` for everything else (e.g. cascading dropdown filters). Without `history=true`, only current non-deleted rows (an `SCD1` entity has no history rows at all). Attribute values come back in their **declared type** (`integer`/`decimal` as JSON numbers, `boolean` as booleans, empty as `null`) even though `mds_master` stores them as text; a value that doesn't parse as its declared type is returned as stored. Same code-ambiguity `409`/`?model_code=` behavior as Entities. `POST`/`PUT`/`PATCH`/`DELETE` all return `405`. |
 
 ### Views (read-only)
 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/v1/views` | Lists deployed, active views |
-| GET | `/api/v1/views/{code}` | `?page=&pageSize=` plus optional `attr.*` filters (see "Attribute-value filters" above), scoped to the view's underlying entity's attributes. A view that has been (re)deployed exposes each attribute in its declared type (`integer`/`decimal`/`boolean`/`date`/`datetime`; a value that doesn't parse becomes `NULL`) - a view deployed before that keeps text columns until it's redeployed (Views page -> Redeploy). SCD2 views additionally expose `is_deleted`. Write methods return `405`. |
+| GET | `/api/v1/views/{code}` | `?page=&pageSize=&fields=&distinct=` plus optional `attr.*` filters (see "Attribute-value filters" and "Response shaping" above), scoped to the view's underlying entity's attributes. A view that has been (re)deployed exposes each attribute in its declared type (`integer`/`decimal`/`boolean`/`date`/`datetime`; a value that is blank or doesn't parse becomes `NULL`) - a view deployed before that keeps text columns until it's redeployed (Views page -> Redeploy). SCD2 views additionally expose `is_deleted`. Write methods return `405`. |
 
 ## Interactive docs
 
@@ -242,6 +317,14 @@ curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/master" | jq
 curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/master/customer?pageSize=20" | jq
 curl -s -H "Authorization: Bearer $TOKEN" \
   "$BASE/api/v1/master/customer?attr.country.exact=DE&attr.revenue.min=1000000" | jq
+
+# 2b. Payload trimming + dropdown values: only some fields / unique values of one field
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/v1/master/customer?fields=code,name&pageSize=200" | jq
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/v1/master/customer?distinct=country" | jq                        # level 1
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/v1/master/customer?distinct=city&attr.country.exact=DE" | jq     # level 2, lazily
 
 # 3. Stage a new record (needs stage:write; entity_id and attribute codes from step 1)
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -279,7 +362,7 @@ field) with a matching HTTP status:
 
 | Status | Meaning |
 |---|---|
-| 400 | Bad request (missing required field, invalid reference value, unknown attribute code in a filter, `attr.*` filter used without `entity_id` on `/stage/records`, invalid entity code format, invalid/negative `page`/`pageSize`, or a query parameter name the endpoint doesn't recognize at all) |
+| 400 | Bad request (missing required field, invalid reference value, unknown attribute code in a filter, `attr.*` filter used without `entity_id` on `/stage/records`, invalid entity code format, invalid/negative `page`/`pageSize`, an unknown/empty `fields`/`distinct` value, `fields` together with `distinct`, `fields`/`distinct` without `entity_id` on `/stage/records`, or a query parameter name the endpoint doesn't recognize at all) |
 | 401 | Missing/empty/invalid/expired/revoked token |
 | 403 | Token valid but missing the required scope, or (Models/Entities/Attributes writes) the token owner isn't currently admin |
 | 404 | Record/entity/model/attribute/view not found, or entity not yet deployed to master |
