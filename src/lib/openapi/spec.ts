@@ -65,6 +65,9 @@ export const openApiSpec = {
           description: { type: 'string', nullable: true },
           status: { type: 'string', enum: ['draft', 'active', 'deprecated'] },
           scd_type: { type: 'string', enum: ['SCD1', 'SCD2'] },
+          is_deployed: { type: 'boolean', description: 'True once the entity\'s mds_master table exists (derived, not stored)' },
+          last_deployed_at: { type: 'string', format: 'date-time', nullable: true, description: 'Most recent deployed commit / schema deployment' },
+          record_count: { type: 'integer', nullable: true, description: 'Current, non-deleted rows in mds_master; null if not deployed' },
           attribute_count: { type: 'integer' },
           attributes: { type: 'array', items: { $ref: '#/components/schemas/Attribute' } },
         },
@@ -421,7 +424,7 @@ export const openApiSpec = {
       },
       put: {
         summary: 'Update an attribute',
-        description: 'Requires an admin token (checked live). Returns the full updated resource.',
+        description: 'Requires an admin token (checked live). Returns the full updated resource. `code` is immutable: sending a different `code` is rejected with 400 (create a new attribute and delete the old one instead - values are not carried over); sending the unchanged code is accepted and ignored. Changing `data_type`/`precision`/`scale` regenerates the entity\'s deployed views.',
         tags: ['Attributes'],
         security: [{ bearerAuth: ['attributes:write'] }],
         requestBody: {
@@ -444,17 +447,18 @@ export const openApiSpec = {
         },
         responses: {
           200: { description: 'OK', content: { 'application/json': { schema: { $ref: '#/components/schemas/Attribute' } } } },
+          400: { description: 'No fields to update, or an attempt to change the immutable `code`', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           403: { description: 'Missing scope or not admin', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           404: { description: 'Not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },
       delete: {
         summary: 'Delete an attribute',
-        description: 'Requires an admin token (checked live). No dependency checks - deleting an attribute referenced elsewhere may orphan data.',
+        description: 'Requires an admin token (checked live). No dependency checks - deleting an attribute referenced elsewhere may orphan data. The entity\'s currently-deployed views are regenerated immediately so they stop selecting the removed column (`views_redeployed`); a view that could not be regenerated is reported in `warnings`.',
         tags: ['Attributes'],
         security: [{ bearerAuth: ['attributes:write'] }],
         responses: {
-          200: { description: 'Deleted', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, entity_id: { type: 'integer' } } } } } },
+          200: { description: 'Deleted', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, entity_id: { type: 'integer' }, views_redeployed: { type: 'array', items: { type: 'string' } }, warnings: { type: 'array', items: { type: 'string' } } } } } } },
           403: { description: 'Missing scope or not admin', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           404: { description: 'Not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
@@ -507,6 +511,7 @@ export const openApiSpec = {
           201: { description: 'Created', content: { 'application/json': { schema: { $ref: '#/components/schemas/StagedRecord' } } } },
           400: { description: 'Validation error (missing business_key, invalid reference value, etc.)', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           404: { description: 'Entity not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          409: { description: 'A staged record with this business key already exists for the entity (`existing_record_id` in the body) - edit it instead of creating a second one', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },
     },
@@ -538,6 +543,7 @@ export const openApiSpec = {
         responses: {
           200: { description: 'OK', content: { 'application/json': { schema: { type: 'object', properties: { record_id: { type: 'string' }, updated_at: { type: 'string' } } } } } },
           400: { description: 'Validation error (e.g. invalid reference value)', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          409: { description: 'The edit would change the record\'s business key to one another staged record already uses', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },
       delete: {
@@ -566,7 +572,7 @@ export const openApiSpec = {
       ],
       get: {
         summary: 'Read deployed master data rows (read-only)',
-        description: 'Supports attribute-value filters (see `attr.<code>` below) alongside `business_key` - `business_key` stays the fast/simple path for an exact-key lookup, `attr.*` covers everything else (e.g. cascading dropdown filters over `field_of_application`/`classification_system`/`classification`).',
+        description: 'Supports attribute-value filters (see `attr.<code>` below) alongside `business_key` - `business_key` stays the fast/simple path for an exact-key lookup, `attr.*` covers everything else (e.g. cascading dropdown filters over `field_of_application`/`classification_system`/`classification`). Values come back in their declared type (integer/decimal as JSON numbers, boolean as booleans, empty as null) even though the master table stores them as text.',
         tags: ['Master Data'],
         security: [{ bearerAuth: ['master:read'] }],
         parameters: [
@@ -600,7 +606,7 @@ export const openApiSpec = {
       parameters: [{ name: 'code', in: 'path', required: true, schema: { type: 'string' } }],
       get: {
         summary: 'Read view rows (read-only)',
-        description: 'Supports attribute-value filters (see `attr.<code>` below), scoped to the view\'s underlying entity\'s attributes.',
+        description: 'Supports attribute-value filters (see `attr.<code>` below), scoped to the view\'s underlying entity\'s attributes. A (re)deployed view exposes each attribute in its declared type (integer/decimal/boolean/date/datetime; a value that does not parse becomes NULL); a view deployed before that change keeps text columns until it is redeployed.',
         tags: ['Views'],
         security: [{ bearerAuth: ['views:read'] }],
         parameters: [

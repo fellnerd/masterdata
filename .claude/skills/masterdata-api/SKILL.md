@@ -109,7 +109,7 @@ return a clean `400` rather than a database error.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/v1/entities` | Filter with `?model_id=` or `?model_code=`. Each entity includes an embedded `attributes` array (`code`, `name`, `data_type`, `max_length`, `is_required`, `is_business_key`) - this is how you find what to put in `data` when staging a record. |
+| GET | `/api/v1/entities` | Filter with `?model_id=` or `?model_code=`. Each entity includes an embedded `attributes` array (`code`, `name`, `data_type`, `max_length`, `is_required`, `is_business_key`) - this is how you find what to put in `data` when staging a record. Entities also carry `is_deployed` (their `mds_master` table exists), `last_deployed_at` (newest deployed commit/schema deployment) and `record_count` (current, non-deleted master rows; `null` if not deployed) - derived live, not stored fields. |
 | POST | `/api/v1/entities` | Body: `{ model_id, code, name, description?, scd_type? }` (`scd_type`: `SCD1`/`SCD2`, default `SCD2`). Admin token required. |
 | GET | `/api/v1/entities/{code}` | `{code}` accepts either the numeric entity id or its code. **`entity.code` is only unique per-model, not globally** - if the same code exists in more than one model, this returns `409`; add `?model_code=` to disambiguate. |
 | PUT | `/api/v1/entities/{code}` | Body: `{ name?, description?, scd_type?, status? }`. Admin token required. Same `?model_code=` disambiguation as GET. Returns the full updated entity. |
@@ -122,8 +122,8 @@ return a clean `400` rather than a database error.
 | GET | `/api/v1/attributes?entity_id=` | `entity_id` is **required**. Lists that entity's attributes standalone (same data also embedded in `GET /api/v1/entities`). |
 | POST | `/api/v1/attributes` | Body: `{ entity_id, code, name, data_type?, is_required?, is_business_key?, is_unique?, reference_entity_id?, sort_order? }`. `data_type` one of `string`, `integer`, `decimal`, `boolean`, `date`, `datetime`, `reference`; `reference_entity_id` required when `data_type` is `reference`. Admin token required. |
 | GET | `/api/v1/attributes/{id}` | Single attribute by numeric id |
-| PUT | `/api/v1/attributes/{id}` | Partial update, same fields as POST. Admin token required. Returns the full updated attribute. |
-| DELETE | `/api/v1/attributes/{id}` | Admin token required. No dependency checks - deleting an attribute referenced elsewhere (e.g. by staged data) can orphan data, unlike Entity delete. |
+| PUT | `/api/v1/attributes/{id}` | Partial update, same fields as POST. Admin token required. Returns the full updated attribute. **`code` is immutable**: a different `code` returns `400` (it used to be silently ignored) - to "rename", create a new attribute and delete the old one (values are not carried over). Sending the unchanged `code` is accepted. Changing `data_type`/`precision`/`scale` regenerates the entity's deployed views. |
+| DELETE | `/api/v1/attributes/{id}` | Admin token required. No dependency checks - deleting an attribute referenced elsewhere (e.g. by staged data) can orphan data, unlike Entity delete. The entity's currently-deployed views are regenerated right away so they stop selecting the dropped column (response: `views_redeployed`, plus `warnings` if one couldn't be regenerated) - previously the view returned `500 Invalid column name` until someone redeployed. |
 
 ### Staging (full CRUD)
 
@@ -192,24 +192,31 @@ comparison).
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/v1/entities/{code}/import` | Triggers a Data Vault import for this entity. `{code}` accepts numeric id or code, same `?model_code=` disambiguation as the Entities endpoints. Entity must already have an import source configured in the UI (Entities → Import Config) - this endpoint can't set one. Returns `202` with `{ job_id, entity_code, source }` immediately; the import runs asynchronously (replaces the entity's staged records with a fresh pull, or a change-tracked merge if a tracking column is configured) and doesn't wait for completion. Poll `GET /api/v1/stage/records?entity_id=` afterward to see the result, or tell the user to check the Jobs page for progress/errors. |
+| POST | `/api/v1/entities/{code}/import` | Triggers a Data Vault import for this entity. `{code}` accepts numeric id or code, same `?model_code=` disambiguation as the Entities endpoints. Entity must already have an import source configured in the UI (Entities → Import Config) - this endpoint can't set one. Returns `202` with `{ job_id, entity_code, source }` immediately; the import runs asynchronously (replaces the entity's staged records with a fresh pull, or a change-tracked merge if a tracking column is configured) and doesn't wait for completion. A source `NULL` is staged as a real JSON `null` (and ends up as SQL `NULL` in load/master/views) - older imports wrote the literal text `"null"` instead; re-run the import to replace those. Poll `GET /api/v1/stage/records?entity_id=` afterward to see the result, or tell the user to check the Jobs page for progress/errors. |
 
 `404` if the entity code doesn't exist, `400` if it exists but has no
 import source configured yet, `409` if the code is ambiguous across models.
+
+POST/PUT also return `409` if a staged record for that entity already uses the
+business key (`existing_record_id` in the body) - the stage table isn't unique
+on business key, and two records for one key used to make a later commit fail
+or write the key to master twice. Edit the existing record instead. (In the UI,
+a commit that would contain the same business key twice is rejected with the
+offending keys listed.)
 
 ### Master data (read-only)
 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/v1/master` | Lists entity codes that have a deployed `mds_master` table |
-| GET | `/api/v1/master/{entityCode}` | `?business_key=&history=true&page=&pageSize=&model_code=` plus optional `attr.*` filters (see "Attribute-value filters" above) - use `business_key` for a fast exact-key lookup, `attr.*` for everything else (e.g. cascading dropdown filters). Without `history=true`, only current non-deleted rows. Same code-ambiguity `409`/`?model_code=` behavior as Entities. `POST`/`PUT`/`PATCH`/`DELETE` all return `405`. |
+| GET | `/api/v1/master/{entityCode}` | `?business_key=&history=true&page=&pageSize=&model_code=` plus optional `attr.*` filters (see "Attribute-value filters" above) - use `business_key` for a fast exact-key lookup, `attr.*` for everything else (e.g. cascading dropdown filters). Without `history=true`, only current non-deleted rows. Attribute values come back in their **declared type** (`integer`/`decimal` as JSON numbers, `boolean` as booleans, empty as `null`) even though `mds_master` stores them as text; a value that doesn't parse as its declared type is returned as stored. Same code-ambiguity `409`/`?model_code=` behavior as Entities. `POST`/`PUT`/`PATCH`/`DELETE` all return `405`. |
 
 ### Views (read-only)
 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/v1/views` | Lists deployed, active views |
-| GET | `/api/v1/views/{code}` | `?page=&pageSize=` plus optional `attr.*` filters (see "Attribute-value filters" above), scoped to the view's underlying entity's attributes. Write methods return `405`. |
+| GET | `/api/v1/views/{code}` | `?page=&pageSize=` plus optional `attr.*` filters (see "Attribute-value filters" above), scoped to the view's underlying entity's attributes. A view that has been (re)deployed exposes each attribute in its declared type (`integer`/`decimal`/`boolean`/`date`/`datetime`; a value that doesn't parse becomes `NULL`) - a view deployed before that keeps text columns until it's redeployed (Views page -> Redeploy). SCD2 views additionally expose `is_deleted`. Write methods return `405`. |
 
 ## Interactive docs
 
@@ -277,5 +284,5 @@ field) with a matching HTTP status:
 | 403 | Token valid but missing the required scope, or (Models/Entities/Attributes writes) the token owner isn't currently admin |
 | 404 | Record/entity/model/attribute/view not found, or entity not yet deployed to master |
 | 405 | Write attempted on a read-only endpoint (master, views) |
-| 409 | Duplicate code (Model/Entity/Attribute create), or an entity code that's ambiguous across models (add `?model_code=`) |
+| 409 | Duplicate code (Model/Entity/Attribute create), an entity code that's ambiguous across models (add `?model_code=`), or a staged record whose business key is already used by another staged record of the entity |
 | 500 | Server error - check `details` in the response body |
