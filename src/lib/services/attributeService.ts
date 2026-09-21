@@ -1,6 +1,7 @@
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import type { ServiceResult } from './types'
 import { upsertSchemaDeployment } from './schemaDeployment'
+import { redeployViewsForEntity } from './viewDeployService'
 
 export interface Attribute {
   id: number
@@ -216,6 +217,9 @@ export interface UpdateAttributeInput {
   validation_regex?: string | null
   sort_order?: number
   updated_by?: string
+  /** Immutable - accepted only so a request that sends the unchanged code back
+   *  isn't rejected; a different value is a 400 (see updateAttribute). */
+  code?: string
 }
 
 // Preserves the internal route's exact prior response shape. Callers that
@@ -223,9 +227,9 @@ export interface UpdateAttributeInput {
 export async function updateAttribute(
   id: number,
   input: UpdateAttributeInput
-): Promise<ServiceResult<{ attribute_id: number; entity_id: number; updated_at: string }>> {
+): Promise<ServiceResult<{ attribute_id: number; entity_id: number; updated_at: string; views_redeployed?: string[]; warnings?: string[] }>> {
   const {
-    name, description, data_type, sql_type, max_length, precision, scale,
+    code, name, description, data_type, sql_type, max_length, precision, scale,
     is_required, is_business_key, is_unique, default_value, reference_entity_id,
     validation_regex, sort_order, updated_by = 'admin'
   } = input
@@ -248,6 +252,29 @@ export async function updateAttribute(
   if (validation_regex !== undefined) { updates.push('validation_regex = @validation_regex'); queryParams.validation_regex = validation_regex }
   if (sort_order !== undefined) { updates.push('sort_order = @sort_order'); queryParams.sort_order = sort_order }
 
+  const attrResult = await dbQuery<{ entity_id: number; code: string; data_type: string; precision: number | null; scale: number | null }>(
+    'SELECT entity_id, code, data_type, [precision], scale FROM mds_meta.attribute WHERE id = @id',
+    { id }
+  )
+  if (attrResult.length === 0) {
+    return { ok: false, status: 404, error: 'Attribute not found' }
+  }
+  const entityId = attrResult[0].entity_id
+  const current = attrResult[0]
+
+  // The code is the key everywhere downstream - the JSON key in every staged
+  // payload, the mds_load/mds_master column, and the deployed view column -
+  // so changing it in mds_meta alone would silently orphan all of them. It
+  // used to be dropped without a word (200, code unchanged); refuse instead.
+  if (code !== undefined && code !== current.code) {
+    return {
+      ok: false,
+      status: 400,
+      error: `Attribute code is immutable ('${current.code}' cannot be renamed to '${code}'). ` +
+        'To change it, create a new attribute and delete this one - existing values are not carried over.'
+    }
+  }
+
   if (updates.length === 0) {
     return { ok: false, status: 400, error: 'No fields to update' }
   }
@@ -256,22 +283,53 @@ export async function updateAttribute(
   updates.push('updated_by = @updated_by')
   queryParams.updated_by = updated_by
 
-  const attrResult = await dbQuery<{ entity_id: number }>(
-    'SELECT entity_id FROM mds_meta.attribute WHERE id = @id',
-    { id }
-  )
-  if (attrResult.length === 0) {
-    return { ok: false, status: 404, error: 'Attribute not found' }
-  }
-  const entityId = attrResult[0].entity_id
-
   await dbExecute(`UPDATE mds_meta.attribute SET ${updates.join(', ')} WHERE id = @id`, queryParams)
   await upsertSchemaDeployment(entityId)
 
-  return { ok: true, data: { attribute_id: id, entity_id: entityId, updated_at: new Date().toISOString() } }
+  // Deployed views expose typed columns derived from data_type/precision/scale
+  // (see viewDeployService.typedColumnExpr), so a change there needs the views
+  // regenerated to take effect.
+  const typingChanged =
+    (data_type !== undefined && data_type !== current.data_type) ||
+    (precision !== undefined && precision !== current.precision) ||
+    (scale !== undefined && scale !== current.scale)
+
+  const data: { attribute_id: number; entity_id: number; updated_at: string; views_redeployed?: string[]; warnings?: string[] } =
+    { attribute_id: id, entity_id: entityId, updated_at: new Date().toISOString() }
+
+  if (typingChanged) {
+    Object.assign(data, await redeployViewsSafely(entityId, updated_by))
+  }
+
+  return { ok: true, data }
 }
 
-export async function deleteAttribute(id: number): Promise<ServiceResult<{ success: true; entity_id: number }>> {
+// Best-effort: a failed redeploy must not fail the attribute change itself
+// (it's already saved) - report it in `warnings` so the caller can see the
+// view needs attention instead of finding out from a 500 later.
+async function redeployViewsSafely(
+  entityId: number,
+  user: string
+): Promise<{ views_redeployed?: string[]; warnings?: string[] }> {
+  try {
+    const results = await redeployViewsForEntity(entityId, user)
+    if (results.length === 0) return {}
+    const ok = results.filter(r => r.status === 'success').map(r => r.code)
+    const failed = results.filter(r => r.status === 'failed')
+    return {
+      views_redeployed: ok,
+      ...(failed.length > 0 && {
+        warnings: failed.map(r => `View ${r.code} could not be redeployed and may be out of date: ${r.error}`)
+      })
+    }
+  } catch (error) {
+    return { warnings: [`Deployed views could not be redeployed and may be out of date: ${error instanceof Error ? error.message : String(error)}`] }
+  }
+}
+
+export async function deleteAttribute(
+  id: number
+): Promise<ServiceResult<{ success: true; entity_id: number; views_redeployed?: string[]; warnings?: string[] }>> {
   const attrResult = await dbQuery<{ entity_id: number }>(
     'SELECT entity_id FROM mds_meta.attribute WHERE id = @id',
     { id }
@@ -284,5 +342,11 @@ export async function deleteAttribute(id: number): Promise<ServiceResult<{ succe
   await dbExecute('DELETE FROM mds_meta.attribute WHERE id = @id', { id })
   await upsertSchemaDeployment(entityId)
 
-  return { ok: true, data: { success: true, entity_id: entityId } }
+  // A deployed view selects this attribute's column by name; once the
+  // attribute is gone, GET /views/... fails with "Invalid column name" until
+  // someone happens to redeploy. Regenerate the entity's deployed views right
+  // away (the master column itself stays - only the view stops selecting it).
+  const redeploy = await redeployViewsSafely(entityId, 'system:attribute-delete')
+
+  return { ok: true, data: { success: true, entity_id: entityId, ...redeploy } }
 }

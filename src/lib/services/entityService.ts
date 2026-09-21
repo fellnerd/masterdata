@@ -59,6 +59,48 @@ interface AttributeSummary {
   sort_order: number
 }
 
+// mds_meta.entity.is_deployed / last_deployed_at / record_count are never
+// written by anything (the deploy pipeline works on commits and dbt models,
+// not on this row), so they always read false/null/null even for entities
+// that are deployed and serving data. Derive them from what actually exists
+// instead: the mds_master table, the newest deployed commit / schema
+// deployment, and the current row count.
+const DEPLOYED_SQL = `CASE WHEN EXISTS (
+        SELECT 1 FROM sys.tables t INNER JOIN sys.schemas sc ON sc.schema_id = t.schema_id
+        WHERE sc.name = 'mds_master' AND t.name = LOWER(e.code)
+      ) THEN CAST(1 AS BIT) ELSE CAST(0 AS BIT) END`
+
+const LAST_DEPLOYED_SQL = `(SELECT MAX(x.ts) FROM (
+        SELECT MAX(c.deployed_at) AS ts FROM mds_stage.[commit] c
+        WHERE c.entity_id = e.id AND c.status = 'deployed'
+        UNION ALL
+        SELECT MAX(sd.deployed_at) FROM mds_meta.schema_deployment sd
+        WHERE sd.entity_id = e.id AND sd.status = 'deployed'
+      ) x)`
+
+// Current, non-deleted rows in the entity's master table (null if it isn't
+// deployed or the count fails - a count must never break entity listing).
+async function countMasterRows(code: string): Promise<number | null> {
+  if (!/^[a-zA-Z0-9_]+$/.test(code)) return null
+  try {
+    const rows = await dbQuery<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM mds_master.[${code.toLowerCase()}] WHERE is_current = 1 AND is_deleted = 0`
+    )
+    return rows[0]?.n ?? null
+  } catch {
+    return null
+  }
+}
+
+async function attachRecordCount<T extends { code: string; is_deployed: boolean; record_count: number | null }>(rows: T[]): Promise<T[]> {
+  await Promise.all(
+    rows.map(async row => {
+      row.record_count = row.is_deployed ? await countMasterRows(row.code) : null
+    })
+  )
+  return rows
+}
+
 export async function listEntities(modelId?: number): Promise<ServiceResult<Entity[]>> {
   let sql = `
     SELECT
@@ -72,9 +114,9 @@ export async function listEntities(modelId?: number): Promise<ServiceResult<Enti
       e.source_table,
       e.staging_view,
       e.hub_name,
-      e.is_deployed,
-      e.last_deployed_at,
-      e.record_count,
+      ${DEPLOYED_SQL} AS is_deployed,
+      ${LAST_DEPLOYED_SQL} AS last_deployed_at,
+      CAST(NULL AS INT) AS record_count,
       e.status,
       e.scd_type,
       e.primary_key_attribute,
@@ -101,7 +143,7 @@ export async function listEntities(modelId?: number): Promise<ServiceResult<Enti
   sql += ` ORDER BY m.name, e.name`
 
   const results = await dbQuery<Entity>(sql, params)
-  return { ok: true, data: results.map(parseEntityRow) }
+  return { ok: true, data: await attachRecordCount(results.map(parseEntityRow)) }
 }
 
 // Matches the internal single-GET's existing shape exactly: bare entity
@@ -111,6 +153,18 @@ export async function getEntity(id: number): Promise<ServiceResult<Entity & { at
   if (entities.length === 0) {
     return { ok: false, status: 404, error: 'Entity not found' }
   }
+
+  // Overwrite the never-written stored columns with the derived values (a
+  // separate query: selecting them alongside e.* would return each column
+  // twice, which the mssql driver turns into arrays).
+  const derived = await dbQuery<{ is_deployed: boolean; last_deployed_at: string | null }>(
+    `SELECT ${DEPLOYED_SQL} AS is_deployed, ${LAST_DEPLOYED_SQL} AS last_deployed_at
+     FROM mds_meta.entity e WHERE e.id = @id`,
+    { id }
+  )
+  entities[0].is_deployed = Boolean(derived[0]?.is_deployed)
+  entities[0].last_deployed_at = derived[0]?.last_deployed_at ?? null
+  await attachRecordCount(entities)
 
   const attributes = await dbQuery<AttributeSummary>(
     `SELECT id, code, name, data_type, is_required, is_business_key, sort_order
