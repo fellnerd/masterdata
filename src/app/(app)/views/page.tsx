@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { 
   Button, 
   Card, 
@@ -13,6 +13,7 @@ import {
   HTMLSelect,
   Switch,
   Callout,
+  ProgressBar,
   Spinner,
   NonIdealState,
   Tabs,
@@ -54,7 +55,14 @@ export default function ViewsPage() {
   const [selectedEntity, setSelectedEntity] = useState<number | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingView, setEditingView] = useState<EntityView | null>(null)
-  const [deploying, setDeploying] = useState(false)
+  const [deployingIds, setDeployingIds] = useState<Set<number>>(new Set())
+  const deploying = deployingIds.size > 0
+  const [deployLog, setDeployLog] = useState<{
+    status: 'running' | 'completed' | 'failed'
+    logs: string[]
+    progress: number
+  } | null>(null)
+  const deployLogRef = useRef<HTMLPreElement>(null)
   
   // Form state
   const [formData, setFormData] = useState({
@@ -175,63 +183,85 @@ export default function ViewsPage() {
     }
   }
   
-  const handleDeployView = async (view: EntityView) => {
+  // Deploys/redeploys the given views and streams the server's step log
+  // (SSE from POST /api/views/deploy?stream=1) into the panel at the top of
+  // the page, the same way the Jobs page shows a running deploy.
+  const runViewDeploy = async (viewIds: number[]) => {
+    setDeployingIds(new Set(viewIds))
+    setDeployLog({ status: 'running', logs: ['📡 Verbinde mit Log-Stream...'], progress: 0 })
+
+    const append = (line: string) =>
+      setDeployLog(prev => prev && { ...prev, logs: [...prev.logs, line] })
+
+    let finalStatus: 'completed' | 'failed' = 'failed'
     try {
-      setDeploying(true)
-      const res = await fetch('/api/views/deploy', {
+      const res = await fetch('/api/views/deploy?stream=1', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ view_ids: [view.id] })
+        body: JSON.stringify({ view_ids: viewIds })
       })
-      
-      const data = await res.json()
-      
-      if (!res.ok) throw new Error(data.error || 'Failed to deploy view')
-      
-      if (data.views_success === 1) {
-        fetchViews()
-      } else {
-        throw new Error(data.results[0]?.error || 'Deployment failed')
+      if (!res.ok || !res.body) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || `Deployment fehlgeschlagen (HTTP ${res.status})`)
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        let sep: number
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, sep)
+          buffer = buffer.slice(sep + 2)
+          const dataLine = frame.split('\n').find(l => l.startsWith('data: '))
+          if (!dataLine) continue
+          const evt = JSON.parse(dataLine.slice(6))
+          if (evt.type === 'log') {
+            append(evt.message)
+          } else if (evt.type === 'progress') {
+            setDeployLog(prev => prev && { ...prev, progress: evt.value })
+          } else if (evt.type === 'result') {
+            finalStatus = evt.views_failed === 0 ? 'completed' : 'failed'
+          } else if (evt.type === 'error') {
+            append(`❌ Fehler: ${evt.error}`)
+          }
+        }
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to deploy view')
+      append(`❌ ${err instanceof Error ? err.message : 'Deployment fehlgeschlagen'}`)
     } finally {
-      setDeploying(false)
+      setDeployLog(prev => prev && { ...prev, status: finalStatus, progress: 100 })
+      setDeployingIds(new Set())
+      fetchViews()
     }
   }
-  
-  const handleDeployAll = async () => {
+
+  const handleDeployView = (view: EntityView) => runViewDeploy([view.id])
+
+  const handleDeployAll = () => {
     const undeployed = views.filter(v => !v.is_deployed)
-    if (undeployed.length === 0) {
-      alert('All views are already deployed')
-      return
-    }
-    
+    if (undeployed.length === 0) return
     if (!confirm(`Deploy ${undeployed.length} view(s)?`)) return
-    
-    try {
-      setDeploying(true)
-      const res = await fetch('/api/views/deploy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ view_ids: undeployed.map(v => v.id) })
-      })
-      
-      const data = await res.json()
-      
-      if (data.views_success > 0) {
-        alert(data.message)
-        fetchViews()
-      } else {
-        throw new Error('All deployments failed')
-      }
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to deploy views')
-    } finally {
-      setDeploying(false)
-    }
+    runViewDeploy(undeployed.map(v => v.id))
   }
-  
+
+  const handleRedeployAll = () => {
+    const deployed = views.filter(v => v.is_deployed)
+    if (deployed.length === 0) return
+    if (!confirm(`${deployed.length} deployte View(s) neu erstellen? Die Views werden kurz gelöscht und aus der aktuellen Definition neu angelegt.`)) return
+    runViewDeploy(deployed.map(v => v.id))
+  }
+
+  // Keep the log panel scrolled to the newest line while a deploy is running.
+  useEffect(() => {
+    const el = deployLogRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [deployLog?.logs.length])
+
   const formatDate = (dateString: string | null) => {
     if (!dateString) return '-'
     return new Date(dateString).toLocaleString('de-DE', {
@@ -289,6 +319,49 @@ export default function ViewsPage() {
         <KpiCard label="Pending" value={pendingViews} />
         <KpiCard label="Entities" value={Object.keys(viewsByEntity).length} />
       </KpiGrid>
+
+      {/* Live deploy log - same panel as the Jobs page's streaming deploy */}
+      {deployLog && (
+        <Callout
+          intent={deployLog.status === 'failed' ? 'danger' : deployLog.status === 'completed' ? 'success' : 'primary'}
+          icon={deployLog.status === 'failed' ? 'error' : deployLog.status === 'completed' ? 'tick-circle' : 'cloud-upload'}
+          title={deployLog.status === 'running' ? 'View-Deployment läuft...' : deployLog.status === 'completed' ? 'View-Deployment erfolgreich!' : 'View-Deployment fehlgeschlagen'}
+          style={{ marginBottom: 16, position: 'relative' }}
+        >
+          {deployLog.status !== 'running' && (
+            <Button
+              small
+              minimal
+              icon="cross"
+              onClick={() => setDeployLog(null)}
+              style={{ position: 'absolute', top: 10, right: 10 }}
+            />
+          )}
+          <ProgressBar
+            value={deployLog.progress / 100}
+            intent={deployLog.status === 'failed' ? 'danger' : deployLog.status === 'completed' ? 'success' : 'primary'}
+            animate={deployLog.status === 'running'}
+            stripes={deployLog.status === 'running'}
+          />
+          <pre
+            ref={deployLogRef}
+            style={{
+              marginTop: 12,
+              background: 'var(--dark-gray5)',
+              padding: 12,
+              borderRadius: 4,
+              maxHeight: 280,
+              overflow: 'auto',
+              fontSize: 11,
+              fontFamily: 'monospace',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all'
+            }}
+          >
+            {deployLog.logs.join('\n')}
+          </pre>
+        </Callout>
+      )}
       
       {/* Section Header with Filter and Actions */}
       <SectionHeader 
@@ -309,9 +382,18 @@ export default function ViewsPage() {
                 icon="cloud-upload" 
                 intent="success"
                 onClick={handleDeployAll}
-                loading={deploying}
+                disabled={deploying}
               >
                 Alle deployen ({pendingViews})
+              </Button>
+            )}
+            {deployedViews > 0 && (
+              <Button 
+                icon="refresh" 
+                onClick={handleRedeployAll}
+                disabled={deploying}
+              >
+                Alle neu deployen ({deployedViews})
               </Button>
             )}
             <Button 
@@ -391,17 +473,19 @@ export default function ViewsPage() {
                         )}
                       </div>
                       <div style={{ display: 'flex', gap: '8px' }}>
-                        {!view.is_deployed && (
-                          <Button 
-                            small 
-                            icon="cloud-upload" 
-                            intent="success"
-                            onClick={() => handleDeployView(view)}
-                            loading={deploying}
-                          >
-                            Deploy
-                          </Button>
-                        )}
+                        <Button 
+                          small 
+                          icon={view.is_deployed ? 'refresh' : 'cloud-upload'} 
+                          intent={view.is_deployed ? 'none' : 'success'}
+                          onClick={() => handleDeployView(view)}
+                          loading={deployingIds.has(view.id)}
+                          disabled={deploying && !deployingIds.has(view.id)}
+                          title={view.is_deployed
+                            ? 'View aus der aktuellen Definition neu erstellen (DROP + CREATE)'
+                            : 'View deployen'}
+                        >
+                          {view.is_deployed ? 'Redeploy' : 'Deploy'}
+                        </Button>
                         <Button small icon="edit" onClick={() => handleEditView(view)}>
                           Bearbeiten
                         </Button>
