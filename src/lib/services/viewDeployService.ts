@@ -1,5 +1,6 @@
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { typedValueExpr } from '@/lib/typedSql'
 
 interface EntityView {
   id: number
@@ -42,34 +43,17 @@ export interface ViewDeployHooks {
 // master/load tables store every attribute as NVARCHAR regardless of its
 // declared data_type (see generate_models.py / mds_master DDL), so a view
 // that just selects the column exposes text - and consumers (BI tools, the
-// v1 API) have to cast it themselves. Expose the declared type instead.
-// TRY_CAST, so a value that doesn't parse becomes NULL rather than failing
-// the whole view; decimals additionally fall back through FLOAT so
-// exponent notation ("1.2E-8"), which DECIMAL rejects, still converts.
+// v1 API) have to cast it themselves. Expose the declared type instead
+// (the cast itself lives in typedValueExpr, shared with the API's ?distinct=).
 export function typedColumnExpr(attr: Attribute, alias?: string): string {
   const col = `[${attr.code}]`
   const out = `[${alias || attr.code}]`
+  const expr = typedValueExpr(attr.data_type, col, attr.precision, attr.scale)
 
-  switch (attr.data_type) {
-    case 'integer':
-      // INT (the project's own declared mapping for integer, see SQL_TYPE_MAP
-      // in generate_models.py), not BIGINT: the mssql driver hands BIGINT back
-      // as a string, which would undo the point of typing the column.
-      return `TRY_CAST(COALESCE(TRY_CAST(${col} AS DECIMAL(38,10)), TRY_CAST(TRY_CAST(${col} AS FLOAT) AS DECIMAL(38,10))) AS INT) AS ${out}`
-    case 'decimal': {
-      const p = attr.precision && attr.scale !== null && attr.scale !== undefined ? attr.precision : 38
-      const s = attr.precision && attr.scale !== null && attr.scale !== undefined ? attr.scale : 10
-      return `COALESCE(TRY_CAST(${col} AS DECIMAL(${p},${s})), TRY_CAST(TRY_CAST(${col} AS FLOAT) AS DECIMAL(${p},${s}))) AS ${out}`
-    }
-    case 'boolean':
-      return `TRY_CAST(${col} AS BIT) AS ${out}`
-    case 'date':
-      return `TRY_CAST(${col} AS DATE) AS ${out}`
-    case 'datetime':
-      return `TRY_CAST(${col} AS DATETIME2) AS ${out}`
-    default:
-      return alias && alias !== attr.code ? `${col} AS ${out}` : col
-  }
+  // String/reference/unknown types come back as the bare column: only alias
+  // when the alias actually differs.
+  if (expr === col) return alias && alias !== attr.code ? `${col} AS ${out}` : col
+  return `${expr} AS ${out}`
 }
 
 async function generateViewSQL(
