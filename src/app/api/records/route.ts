@@ -4,7 +4,7 @@ import { logger } from '@/lib/logger'
 import { validateReferenceAttributes } from '@/lib/validateReferences'
 import { buildRecordFilters } from '@/lib/attributeFilters'
 import { parsePagination } from '@/lib/pagination'
-import { getBusinessKeyAttributeCodes, deriveBusinessKey } from '@/lib/businessKey'
+import { getBusinessKeyAttributeCodes, deriveBusinessKey, findRecordByBusinessKey, duplicateBusinessKeyMessage } from '@/lib/businessKey'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -175,6 +175,14 @@ export async function POST(request: NextRequest) {
             : 'business_key is required (either directly or in data with a business key attribute)'
         },
         { status: 400 }
+      )
+    }
+
+    const existingRecord = await findRecordByBusinessKey(entity_id, String(business_key))
+    if (existingRecord) {
+      return NextResponse.json(
+        { error: duplicateBusinessKeyMessage(String(business_key), existingRecord), existing_record_id: existingRecord.id },
+        { status: 409 }
       )
     }
 

@@ -4,7 +4,7 @@ import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
 import { buildRecordFilters, findUnknownQueryParam } from '@/lib/attributeFilters'
 import { parsePagination } from '@/lib/pagination'
-import { getBusinessKeyAttributeCodes, deriveBusinessKey } from '@/lib/businessKey'
+import { getBusinessKeyAttributeCodes, deriveBusinessKey, findRecordByBusinessKey, duplicateBusinessKeyMessage } from '@/lib/businessKey'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -139,6 +139,14 @@ export async function POST(request: NextRequest) {
     // of hashbytes function." String-typed business keys never hit this,
     // which is why the bug only shows up for numeric business-key attributes.
     business_key = String(business_key)
+
+    const existingRecord = await findRecordByBusinessKey(entity_id, business_key)
+    if (existingRecord) {
+      return NextResponse.json(
+        { error: duplicateBusinessKeyMessage(business_key, existingRecord), existing_record_id: existingRecord.id },
+        { status: 409 }
+      )
+    }
 
     const dataJson = JSON.stringify(data)
 

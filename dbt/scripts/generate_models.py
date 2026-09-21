@@ -309,7 +309,9 @@ def generate_model_sql(entity, attributes):
       "-- Update commit status to 'deployed' for all loaded commits",
       "UPDATE mds_stage.[commit] SET status = 'deployed' WHERE status = 'loaded' AND entity_id = {entity_id}{COMMIT_FILTER_PLAIN}",
       "-- Remove DELETE records from load (they should not appear in current state)",
-      "DELETE FROM {load_table} WHERE operation = 'DELETE'"
+      "DELETE FROM {load_table} WHERE operation = 'DELETE'",
+      "-- Guard: never more than one CURRENT row per business key (warn, don't fail, if existing data already violates it)",
+      "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_{entity_code}_current' AND object_id = OBJECT_ID('{master_table}')) BEGIN BEGIN TRY CREATE UNIQUE NONCLUSTERED INDEX UX_{entity_code}_current ON {master_table} (business_key_hash) WHERE is_current = 1 END TRY BEGIN CATCH PRINT 'Could not create UX_{entity_code}_current - {master_table} already has more than one current row for some business key: ' + ERROR_MESSAGE() END CATCH END"
     ]
   )
 }}}}
@@ -333,7 +335,7 @@ def generate_model_sql(entity, attributes):
 {{% if is_incremental() %}}
 
 -- Incremental: Nur unverarbeitete Records aus Load-Tabelle
-WITH source_data AS (
+WITH source_all AS (
     SELECT 
         CAST(source_id AS BIGINT) AS load_id,
         business_key,
@@ -343,9 +345,19 @@ WITH source_data AS (
         commit_id,
         source_system,
         source_id,
-        created_at
+        created_at,
+        ROW_NUMBER() OVER (PARTITION BY business_key ORDER BY CAST(source_id AS BIGINT) DESC) AS rn
     FROM {load_model_ref}
     WHERE is_processed = 0
+),
+
+-- Ein Business Key darf pro Lauf nur EINE neue Version erzeugen (neuester Load-Satz
+-- gewinnt) - sonst schreiben zwei Load-Zeilen zum selben Key zwei "aktuelle" Master-Zeilen.
+source_data AS (
+    SELECT load_id, business_key, business_key_hash, operation, {select_columns},
+           commit_id, source_system, source_id, created_at
+    FROM source_all
+    WHERE rn = 1
 ),
 
 -- Change Detection
@@ -486,7 +498,11 @@ def generate_load_model_sql(entity, attributes):
 {{% if is_incremental() %}}
 
 -- Incremental: Nur approved Commits laden (MERGE - überschreibt bei gleichem BK)
-SELECT
+-- Pro Business Key nur der neueste Satz (höchste staged_record.id): zwei Sätze zum
+-- selben Key im selben Lauf lassen den MERGE entweder mit SQL 8672 scheitern (Key
+-- existiert schon) oder schreiben den Key doppelt (Key ist neu).
+WITH ranked AS (
+  SELECT
     sr.business_key_hash,
     sr.business_key,
 {json_select},
@@ -496,13 +512,20 @@ SELECT
     CAST(sr.id AS NVARCHAR(255)) AS source_id,
     CAST(0 AS BIT) AS is_processed,
     GETUTCDATE() AS created_at,
-    CAST(NULL AS DATETIME2) AS processed_at
-FROM mds_stage.staged_record sr
-INNER JOIN mds_stage.[commit] c ON sr.commit_id = c.id
-WHERE sr.entity_id = {entity_id}
-  AND sr.status = 'committed'
-  AND c.status = 'approved'
-  {COMMIT_FILTER}
+    CAST(NULL AS DATETIME2) AS processed_at,
+    ROW_NUMBER() OVER (PARTITION BY sr.business_key_hash ORDER BY sr.id DESC) AS rn
+  FROM mds_stage.staged_record sr
+  INNER JOIN mds_stage.[commit] c ON sr.commit_id = c.id
+  WHERE sr.entity_id = {entity_id}
+    AND sr.status = 'committed'
+    AND c.status = 'approved'
+    {COMMIT_FILTER}
+)
+SELECT
+  business_key_hash, business_key,
+  {', '.join([attr['code'] for attr in attributes])},
+  commit_id, operation, source_system, source_id, is_processed, created_at, processed_at
+FROM ranked WHERE rn = 1
 
 {{% else %}}
 

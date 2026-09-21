@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
-import { getBusinessKeyAttributeCodes, deriveBusinessKey } from '@/lib/businessKey'
+import { getBusinessKeyAttributeCodes, deriveBusinessKey, findRecordByBusinessKey, duplicateBusinessKeyMessage } from '@/lib/businessKey'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -102,6 +102,13 @@ export async function PUT(
         // change" - deriveBusinessKey only returns undefined when a
         // component is genuinely missing.
         if (newBusinessKey !== undefined && newBusinessKey !== current.business_key) {
+          const clash = await findRecordByBusinessKey(current.entity_id, newBusinessKey, current.id)
+          if (clash) {
+            return NextResponse.json(
+              { error: duplicateBusinessKeyMessage(newBusinessKey, clash), existing_record_id: clash.id },
+              { status: 409 }
+            )
+          }
           updates.push('business_key = @businessKey')
           updates.push("business_key_hash = CONVERT(CHAR(64), HASHBYTES('SHA2_256', @businessKey), 2)")
           queryParams.businessKey = newBusinessKey

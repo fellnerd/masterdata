@@ -26,3 +26,46 @@ export function deriveBusinessKey(bkCodes: string[], data: Record<string, unknow
   if (values.some(v => v === undefined || v === null || v === '')) return undefined
   return values.map(v => String(v)).join('|')
 }
+
+export interface ExistingStagedRecord {
+  id: number
+  status: string
+  operation: string
+}
+
+// A staged record for this entity that already uses `businessKey`, if any
+// (excluding `excludeId`, for edits). The stage table isn't unique on
+// business key, so without this check creating the same key twice - or
+// editing a record onto another record's key - silently stages two records
+// for one key: a later commit then either fails in the load MERGE or writes
+// the key to mds_master twice, and deleting "one" of them leaves the other
+// looking live in Data Entry.
+export async function findRecordByBusinessKey(
+  entityId: number,
+  businessKey: string,
+  excludeId?: number
+): Promise<ExistingStagedRecord | null> {
+  const rows = await dbQuery<ExistingStagedRecord>(
+    `SELECT TOP 1 id, status, operation
+     FROM mds_stage.staged_record
+     WHERE entity_id = @entityId
+       AND business_key_hash = CONVERT(CHAR(64), HASHBYTES('SHA2_256', @businessKey), 2)
+       ${excludeId !== undefined ? 'AND id <> @excludeId' : ''}
+     ORDER BY id`,
+    excludeId !== undefined
+      ? { entityId, businessKey, excludeId }
+      : { entityId, businessKey }
+  )
+  return rows[0] ?? null
+}
+
+export function duplicateBusinessKeyMessage(businessKey: string, existing: ExistingStagedRecord): string {
+  const deleting = String(existing.operation).toUpperCase() === 'DELETE'
+  return (
+    `A record with business key "${businessKey}" already exists (id ${existing.id}, status ${existing.status}` +
+    `${deleting ? ', marked for deletion' : ''}). ` +
+    (deleting
+      ? 'Commit and deploy that deletion first, then create the key again.'
+      : 'Edit that record instead of creating a second one.')
+  )
+}

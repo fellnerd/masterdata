@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { addJob } from '@/lib/queue/queue'
+import { findDuplicateBusinessKeys, describeDuplicateBusinessKeys } from '@/lib/commitValidation'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -163,6 +164,14 @@ export async function POST(request: NextRequest) {
         committable: committableIds.length,
         skipped: change_ids.length - committableIds.length 
       }, 'Filtering committable records')
+
+      const duplicates = await findDuplicateBusinessKeys(entity_id, committableIds)
+      if (duplicates.length > 0) {
+        return NextResponse.json(
+          { error: describeDuplicateBusinessKeys(duplicates), duplicates: duplicates.slice(0, 100) },
+          { status: 400 }
+        )
+      }
       
       // Create a new commit with only committable records
       await dbExecute(
@@ -236,6 +245,14 @@ export async function POST(request: NextRequest) {
     }
     
     const pendingCount = pendingRecords[0].count
+
+    const duplicates = await findDuplicateBusinessKeys(entity_id)
+    if (duplicates.length > 0) {
+      return NextResponse.json(
+        { error: describeDuplicateBusinessKeys(duplicates), duplicates: duplicates.slice(0, 100) },
+        { status: 400 }
+      )
+    }
     
     // For large commits (> 1000 records), use background job
     const USE_BACKGROUND_JOB = pendingCount > 1000
