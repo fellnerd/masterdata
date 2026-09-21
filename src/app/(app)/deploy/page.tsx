@@ -79,6 +79,11 @@ export default function DeployPage() {
   const [deployMode, setDeployMode] = useState<'load' | 'full'>('full')
   // Queue Only: Job wird erstellt aber nicht gestartet
   const [queueOnly, setQueueOnly] = useState(false)
+  // Commits queued for deletion (bulk button or a row's trash icon) - the
+  // confirmation dialog is open while this is non-null.
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<number[] | null>(null)
+  const [deletingCommits, setDeletingCommits] = useState(false)
+  const [actionMessage, setActionMessage] = useState<{ intent: 'success' | 'danger'; text: string } | null>(null)
 
   // Fetch commits and schema deployments
   useEffect(() => {
@@ -542,6 +547,48 @@ export default function DeployPage() {
     }
   }
 
+  // Discards commits that were approved but shouldn't be deployed: the
+  // commit is removed and its records go back to draft (Data Entry).
+  async function handleDeleteCommits() {
+    if (!pendingDeleteIds) return
+    setDeletingCommits(true)
+    const failures: string[] = []
+    let deleted = 0
+    let released = 0
+
+    for (const id of pendingDeleteIds) {
+      try {
+        const res = await fetch(`/api/commits/${id}`, { method: 'DELETE' })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok) {
+          deleted++
+          released += data.released_records || 0
+        } else {
+          failures.push(data.error || `Commit ${id}: HTTP ${res.status}`)
+        }
+      } catch (err) {
+        failures.push(err instanceof Error ? err.message : `Commit ${id}: Unbekannter Fehler`)
+      }
+    }
+
+    setPendingDeleteIds(null)
+    setSelectedCommits(new Set())
+    setDeletingCommits(false)
+
+    if (failures.length === 0) {
+      setActionMessage({
+        intent: 'success',
+        text: `${deleted} Commit(s) gelöscht, ${released} Datensatz/Datensätze zurück im Entwurf (Data Entry).`
+      })
+    } else {
+      setActionMessage({
+        intent: 'danger',
+        text: `${deleted} gelöscht, ${failures.length} fehlgeschlagen: ${failures.join(' | ')}`
+      })
+    }
+    await fetchCommits()
+  }
+
   const selectedTotal = useMemo(() => {
     return approvedCommits
       .filter(c => selectedCommits.has(c.id))
@@ -567,6 +614,23 @@ export default function DeployPage() {
         <KpiCard label="Heute deployed" value={kpis.deployedToday} />
         <KpiCard label="Insgesamt deployed" value={kpis.totalDeployed} />
       </KpiGrid>
+
+      {actionMessage && (
+        <Callout
+          intent={actionMessage.intent}
+          icon={actionMessage.intent === 'success' ? 'tick-circle' : 'error'}
+          style={{ marginBottom: 16, position: 'relative' }}
+        >
+          {actionMessage.text}
+          <Button
+            small
+            minimal
+            icon="cross"
+            onClick={() => setActionMessage(null)}
+            style={{ position: 'absolute', top: 10, right: 10 }}
+          />
+        </Callout>
+      )}
 
       {/* Deployment Progress - Enhanced with SSE streaming */}
       {currentJob && currentJob.status === 'running' && (
@@ -700,13 +764,25 @@ export default function DeployPage() {
               )}
             </>
           ) : (
-            <Button
-              icon="cloud-upload"
-              intent="primary"
-              text={`Deploy ausgewählte (${selectedCommits.size})`}
-              disabled={selectedCommits.size === 0 || deploying}
-              onClick={() => setShowDeployDialog(true)}
-            />
+            <>
+              <Button
+                icon="cloud-upload"
+                intent="primary"
+                text={`Deploy ausgewählte (${selectedCommits.size})`}
+                disabled={selectedCommits.size === 0 || deploying}
+                onClick={() => setShowDeployDialog(true)}
+              />
+              {selectedTab === 'approved' && (
+                <Button
+                  icon="trash"
+                  intent="danger"
+                  text={`Löschen (${selectedCommits.size})`}
+                  disabled={selectedCommits.size === 0 || deploying}
+                  onClick={() => setPendingDeleteIds(Array.from(selectedCommits))}
+                  title="Commit(s) nicht deployen: löschen und Datensätze zurück in den Entwurf"
+                />
+              )}
+            </>
           )}
           <Button
             icon="refresh"
@@ -828,6 +904,7 @@ export default function DeployPage() {
                 <th>Erstellt</th>
                 <th>Genehmigt</th>
                 {selectedTab === 'deployed' && <th>Deployed</th>}
+                {selectedTab === 'approved' && <th style={{ width: 50 }} />}
               </tr>
             </thead>
             <tbody>
@@ -871,6 +948,19 @@ export default function DeployPage() {
                           <small style={{ color: 'var(--gray3)' }}>{commit.deployed_by}</small>
                         </>
                       ) : '-'}
+                    </td>
+                  )}
+                  {selectedTab === 'approved' && (
+                    <td>
+                      <Button
+                        small
+                        minimal
+                        icon="trash"
+                        intent="danger"
+                        disabled={deploying}
+                        onClick={() => setPendingDeleteIds([commit.id])}
+                        title="Commit löschen (nicht deployen)"
+                      />
                     </td>
                   )}
                 </tr>
@@ -988,6 +1078,42 @@ export default function DeployPage() {
               </Button>
               <Button intent="primary" icon="cloud-upload" onClick={() => { setQueueOnly(false); handleDeploy(); }}>
                 Jetzt deployen
+              </Button>
+            </>
+          }
+        />
+      </Dialog>
+      {/* Delete Commit Confirmation Dialog */}
+      <Dialog
+        isOpen={pendingDeleteIds !== null}
+        onClose={() => !deletingCommits && setPendingDeleteIds(null)}
+        title="Commit löschen"
+        icon="trash"
+      >
+        <DialogBody>
+          <p>
+            <strong>{pendingDeleteIds?.length ?? 0}</strong> Commit(s) werden <strong>nicht deployed</strong> und gelöscht:
+          </p>
+          <ul>
+            {commits
+              .filter(c => pendingDeleteIds?.includes(c.id))
+              .map(c => (
+                <li key={c.id}>
+                  <code>{c.code}</code> - {c.entity_name} ({c.record_count || 0} Datensätze)
+                </li>
+              ))}
+          </ul>
+          <Callout intent="primary" icon="info-sign">
+            Die zugehörigen Datensätze werden nicht gelöscht, sondern gehen zurück in den
+            Entwurf (Data Entry) und können bearbeitet oder erneut committed werden.
+          </Callout>
+        </DialogBody>
+        <DialogFooter
+          actions={
+            <>
+              <Button onClick={() => setPendingDeleteIds(null)} disabled={deletingCommits}>Abbrechen</Button>
+              <Button intent="danger" icon="trash" onClick={handleDeleteCommits} loading={deletingCommits}>
+                Ja, löschen
               </Button>
             </>
           }

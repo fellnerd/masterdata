@@ -152,27 +152,88 @@ export async function PUT(
   }
 }
 
-// DELETE /api/commits/[commitId] - Cancel/delete pending commit
+// DELETE /api/commits/[commitId] - Discard a commit that hasn't been deployed
+//
+// Removes the commit and hands its staged records back to draft (commit_id
+// cleared, status PENDING) so they show up in Data Entry again and can be
+// edited or committed anew - nothing is thrown away, unlike "reject", which
+// deletes never-deployed records outright. Allowed for pending, approved
+// ("ready to deploy") and rejected commits; a commit that's being processed
+// or has already been loaded/deployed can't be discarded this way.
+const DELETABLE_COMMIT_STATUSES = ['pending', 'approved', 'rejected']
+
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ commitId: string }> }
 ) {
   const { commitId } = await params
   logger.info({ commitId }, 'DELETE /api/commits/[commitId]')
-  
+
+  const id = parseInt(commitId)
+  if (!Number.isInteger(id)) {
+    return NextResponse.json({ error: 'Invalid commit id' }, { status: 400 })
+  }
+
   try {
-    // Only allow deleting pending commits
-    // TODO: Check status and delete from database
-    
-    return NextResponse.json({ 
+    const commits = await dbQuery<{ id: number; code: string; status: string }>(
+      'SELECT id, code, status FROM mds_stage.[commit] WHERE id = @id',
+      { id }
+    )
+    if (commits.length === 0) {
+      return NextResponse.json({ error: 'Commit not found' }, { status: 404 })
+    }
+
+    const commit = commits[0]
+    if (!DELETABLE_COMMIT_STATUSES.includes(commit.status.toLowerCase())) {
+      return NextResponse.json(
+        {
+          error: `Commit ${commit.code} has status '${commit.status}' and can't be deleted - only pending, approved or rejected commits can be discarded.`
+        },
+        { status: 409 }
+      )
+    }
+
+    // One transaction: the status guard on the DELETE means a commit that a
+    // deploy picked up in the meantime is left alone (and its records too).
+    const result = await dbQuery<{ deleted: number; released: number }>(
+      `SET XACT_ABORT ON;
+       BEGIN TRANSACTION;
+       DECLARE @deleted INT = 0, @released INT = 0;
+       DELETE FROM mds_stage.[commit]
+       WHERE id = @id AND status IN ('pending', 'approved', 'rejected');
+       SET @deleted = @@ROWCOUNT;
+       IF @deleted = 1
+       BEGIN
+         UPDATE mds_stage.staged_record
+         SET commit_id = NULL, status = 'PENDING'
+         WHERE commit_id = @id;
+         SET @released = @@ROWCOUNT;
+       END
+       COMMIT TRANSACTION;
+       SELECT @deleted AS deleted, @released AS released;`,
+      { id }
+    )
+
+    if (!result[0] || result[0].deleted !== 1) {
+      return NextResponse.json(
+        { error: `Commit ${commit.code} changed state while it was being deleted - reload and try again.` },
+        { status: 409 }
+      )
+    }
+
+    logger.info({ commitId: id, code: commit.code, released: result[0].released }, 'Commit discarded')
+
+    return NextResponse.json({
       success: true,
-      commit_id: commitId,
-      message: 'Commit cancelled and rows returned to draft status'
+      commit_id: id,
+      code: commit.code,
+      released_records: result[0].released,
+      message: `Commit ${commit.code} deleted, ${result[0].released} record(s) returned to draft`
     })
   } catch (error) {
     logger.error({ error, commitId }, 'Failed to delete commit')
     return NextResponse.json(
-      { error: 'Failed to delete commit' },
+      { error: 'Failed to delete commit', details: String(error) },
       { status: 500 }
     )
   }
