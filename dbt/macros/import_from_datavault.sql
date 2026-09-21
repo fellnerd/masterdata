@@ -173,14 +173,22 @@ WITH source_rows AS (
     CAST(NULL AS NVARCHAR(500)) AS tracking_value,
     {% endif %}
     {% for attr in sourced_attributes %}
-    ISNULL(CAST({{ attr.source_col }} AS NVARCHAR(MAX)), 'null') AS val_{{ attr.code }}{{ "," if not loop.last }}
+    CAST({{ attr.source_col }} AS NVARCHAR(MAX)) AS val_{{ attr.code }}{{ "," if not loop.last }}
     {% endfor %}
   FROM {{ source_object }}
   WHERE {{ filter_condition }}
 )
 {% endset %}
 
-{# JSON payload expression for a brand-new row: '{"attr1":"..","attr2":".."}'.
+{# NULL handling: a source NULL is written as a real JSON null (`"col":null`),
+   NOT the text 'null' - that used to be `ISNULL(CAST(col ...), 'null')`, which
+   ended up as the 4-character string "null" in mds_load/mds_master/mds_view
+   (broke "is empty" filters and numeric casts). JSON_VALUE(data, '$.col') in
+   the load model turns a JSON null into a proper SQL NULL. The JSON_MODIFY
+   merge below drops the key when the new value is NULL, which reads back as
+   NULL the same way.
+
+   JSON payload expression for a brand-new row: '{"attr1":"..","attr2":".."}'.
    Always references the source CTE aliased as `sr` - every query below
    that uses this aliases it that way, so this one expression works
    everywhere without any string-rewriting.
@@ -195,7 +203,7 @@ WITH source_rows AS (
    again there would double-escape it. #}
 {% set json_parts = [] %}
 {% for attr in sourced_attributes %}
-  {% do json_parts.append("'\"" ~ attr.code ~ "\":\"' + STRING_ESCAPE(sr.val_" ~ attr.code ~ ", 'json') + '\"'") %}
+  {% do json_parts.append("'\"" ~ attr.code ~ "\":' + CASE WHEN sr.val_" ~ attr.code ~ " IS NULL THEN 'null' ELSE '\"' + STRING_ESCAPE(sr.val_" ~ attr.code ~ ", 'json') + '\"' END") %}
 {% endfor %}
 {% set new_payload_expr = "'{' + " ~ (json_parts | join(" + ',' + ")) ~ " + '}'" %}
 

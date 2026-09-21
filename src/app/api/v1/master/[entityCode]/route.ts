@@ -5,6 +5,7 @@ import { verifyApiToken } from '@/lib/apiToken'
 import { resolveEntityId } from '@/lib/services/entityService'
 import { parsePagination } from '@/lib/pagination'
 import { buildFlatAttributeFilters, findUnknownQueryParam } from '@/lib/attributeFilters'
+import { coerceRowByAttributeTypes } from '@/lib/typedRows'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -109,9 +110,17 @@ export async function GET(
       { ...qparams, offset, pageSize }
     )
 
+    // Attribute columns are stored as text - hand them back as their declared
+    // type (numbers as JSON numbers, booleans as booleans).
+    const attrTypes = await dbQuery<{ code: string; data_type: string }>(
+      'SELECT code, data_type FROM mds_meta.attribute WHERE entity_id = @entityId',
+      { entityId: resolved.entity.id }
+    )
+    const typeByCode = new Map(attrTypes.map(a => [a.code, a.data_type]))
+
     return NextResponse.json({
       entity: resolved.entity,
-      data,
+      data: data.map(row => coerceRowByAttributeTypes(row, typeByCode)),
       total,
       page,
       pageSize,
