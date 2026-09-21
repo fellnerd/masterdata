@@ -4,6 +4,10 @@ import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
 import { parsePagination } from '@/lib/pagination'
 import { buildFlatAttributeFilters, findUnknownQueryParam } from '@/lib/attributeFilters'
+import {
+  parseShaping, SHAPING_PARAMS, MAX_DISTINCT_PAGE_SIZE, listFlatColumns, loadEntityAttributes,
+  resolveNames, quoteIdent, queryDistinct, formatDistinctValue,
+} from '@/lib/responseShaping'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -45,12 +49,17 @@ export async function GET(
   try {
     const { searchParams } = new URL(request.url)
 
-    const unknownParam = findUnknownQueryParam(searchParams, ['page', 'pageSize'])
+    const unknownParam = findUnknownQueryParam(searchParams, ['page', 'pageSize', ...SHAPING_PARAMS])
     if (unknownParam) {
       return NextResponse.json({ error: `Unknown query parameter: ${unknownParam}` }, { status: 400 })
     }
 
-    const pagination = parsePagination(searchParams)
+    const shaping = parseShaping(searchParams)
+    if (!shaping.ok) {
+      return NextResponse.json({ error: shaping.error }, { status: shaping.status })
+    }
+
+    const pagination = parsePagination(searchParams, shaping.distinct ? MAX_DISTINCT_PAGE_SIZE : 200)
     if (!pagination.ok) {
       return NextResponse.json({ error: pagination.error }, { status: pagination.status })
     }
@@ -62,6 +71,42 @@ export async function GET(
     }
     const where = `WHERE 1=1${filterResult.whereClause}`
 
+    // ?fields= / ?distinct= name real columns of the view (which - unlike a
+    // master table - can have aliases or custom columns), checked against
+    // sys.columns. A (re)deployed view already exposes typed columns, so the
+    // values need no cast here.
+    let selectList = '*'
+    if (shaping.fields || shaping.distinct) {
+      const columns = await listFlatColumns('mds_view', resolved.table)
+      const named = resolveNames(shaping.fields ?? [shaping.distinct!], columns)
+      if (!named.ok) {
+        return NextResponse.json({ error: named.error }, { status: named.status })
+      }
+
+      if (shaping.distinct) {
+        const field = named.names[0]
+        const attributes = await loadEntityAttributes(resolved.entityId)
+        const { values, total } = await queryDistinct({
+          source: `mds_view.[${resolved.table}]`,
+          valueExpr: quoteIdent(field),
+          where,
+          params: filterResult.params,
+          offset,
+          pageSize,
+        })
+        return NextResponse.json({
+          field,
+          data: values.map(v => formatDistinctValue(v, attributes.get(field.toLowerCase())?.data_type)),
+          total,
+          page,
+          pageSize,
+          totalPages: Math.ceil(total / pageSize),
+        })
+      }
+
+      selectList = named.names.map(quoteIdent).join(', ')
+    }
+
     const countResult = await dbQuery<{ total: number }>(
       `SELECT COUNT(*) AS total FROM mds_view.[${resolved.table}] ${where}`,
       filterResult.params
@@ -69,7 +114,7 @@ export async function GET(
     const total = countResult[0]?.total || 0
 
     const data = await dbQuery<Record<string, unknown>>(
-      `SELECT * FROM mds_view.[${resolved.table}] ${where}
+      `SELECT ${selectList} FROM mds_view.[${resolved.table}] ${where}
        ORDER BY (SELECT NULL)
        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
       { ...filterResult.params, offset, pageSize }

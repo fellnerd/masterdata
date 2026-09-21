@@ -6,6 +6,11 @@ import { resolveEntityId } from '@/lib/services/entityService'
 import { parsePagination } from '@/lib/pagination'
 import { buildFlatAttributeFilters, findUnknownQueryParam } from '@/lib/attributeFilters'
 import { coerceRowByAttributeTypes } from '@/lib/typedRows'
+import { typedValueExpr } from '@/lib/typedSql'
+import {
+  parseShaping, SHAPING_PARAMS, MAX_DISTINCT_PAGE_SIZE, listFlatColumns, loadEntityAttributes,
+  resolveNames, quoteIdent, queryDistinct, formatDistinctValue,
+} from '@/lib/responseShaping'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -70,14 +75,19 @@ export async function GET(
   }
 
   try {
-    const unknownParam = findUnknownQueryParam(searchParams, ['business_key', 'history', 'page', 'pageSize', 'model_code'])
+    const unknownParam = findUnknownQueryParam(searchParams, ['business_key', 'history', 'page', 'pageSize', 'model_code', ...SHAPING_PARAMS])
     if (unknownParam) {
       return NextResponse.json({ error: `Unknown query parameter: ${unknownParam}` }, { status: 400 })
     }
 
+    const shaping = parseShaping(searchParams)
+    if (!shaping.ok) {
+      return NextResponse.json({ error: shaping.error }, { status: shaping.status })
+    }
+
     const businessKey = searchParams.get('business_key')
     const includeHistory = searchParams.get('history') === 'true'
-    const pagination = parsePagination(searchParams)
+    const pagination = parsePagination(searchParams, shaping.distinct ? MAX_DISTINCT_PAGE_SIZE : 200)
     if (!pagination.ok) {
       return NextResponse.json({ error: pagination.error }, { status: pagination.status })
     }
@@ -97,6 +107,48 @@ export async function GET(
     where += filterResult.whereClause
     Object.assign(qparams, filterResult.params)
 
+    // Attribute columns are stored as text - hand them back as their declared
+    // type (numbers as JSON numbers, booleans as booleans).
+    const attributes = await loadEntityAttributes(resolved.entity.id)
+    const typeByCode = new Map([...attributes.values()].map(a => [a.code, a.data_type]))
+
+    // ?fields= / ?distinct= name real columns of the master table (attributes
+    // plus business_key, valid_from, ...), checked against sys.columns.
+    let selectList = '*'
+    if (shaping.fields || shaping.distinct) {
+      const columns = await listFlatColumns('mds_master', resolved.table)
+      const named = resolveNames(shaping.fields ?? [shaping.distinct!], columns)
+      if (!named.ok) {
+        return NextResponse.json({ error: named.error }, { status: named.status })
+      }
+
+      if (shaping.distinct) {
+        const field = named.names[0]
+        const attr = attributes.get(field.toLowerCase())
+        const { values, total } = await queryDistinct({
+          source: `mds_master.[${resolved.table}]`,
+          valueExpr: attr
+            ? typedValueExpr(attr.data_type, quoteIdent(field), attr.precision, attr.scale)
+            : quoteIdent(field),
+          where,
+          params: qparams,
+          offset,
+          pageSize,
+        })
+        return NextResponse.json({
+          entity: resolved.entity,
+          field,
+          data: values.map(v => formatDistinctValue(v, attr?.data_type)),
+          total,
+          page,
+          pageSize,
+          totalPages: Math.ceil(total / pageSize),
+        })
+      }
+
+      selectList = named.names.map(quoteIdent).join(', ')
+    }
+
     const countResult = await dbQuery<{ total: number }>(
       `SELECT COUNT(*) AS total FROM mds_master.[${resolved.table}] ${where}`,
       qparams
@@ -104,19 +156,11 @@ export async function GET(
     const total = countResult[0]?.total || 0
 
     const data = await dbQuery<Record<string, unknown>>(
-      `SELECT * FROM mds_master.[${resolved.table}] ${where}
+      `SELECT ${selectList} FROM mds_master.[${resolved.table}] ${where}
        ORDER BY business_key, valid_from
        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
       { ...qparams, offset, pageSize }
     )
-
-    // Attribute columns are stored as text - hand them back as their declared
-    // type (numbers as JSON numbers, booleans as booleans).
-    const attrTypes = await dbQuery<{ code: string; data_type: string }>(
-      'SELECT code, data_type FROM mds_meta.attribute WHERE entity_id = @entityId',
-      { entityId: resolved.entity.id }
-    )
-    const typeByCode = new Map(attrTypes.map(a => [a.code, a.data_type]))
 
     return NextResponse.json({
       entity: resolved.entity,

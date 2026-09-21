@@ -4,6 +4,11 @@ import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
 import { buildRecordFilters, findUnknownQueryParam } from '@/lib/attributeFilters'
 import { parsePagination } from '@/lib/pagination'
+import { typedValueExpr } from '@/lib/typedSql'
+import {
+  parseShaping, SHAPING_PARAMS, MAX_DISTINCT_PAGE_SIZE, loadEntityAttributes, resolveNames,
+  queryDistinct, formatDistinctValue, pickFields,
+} from '@/lib/responseShaping'
 import { getBusinessKeyAttributeCodes, deriveBusinessKey, findRecordByBusinessKey, duplicateBusinessKeyMessage } from '@/lib/businessKey'
 
 export const runtime = 'nodejs'
@@ -36,12 +41,17 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
 
-    const unknownParam = findUnknownQueryParam(searchParams, ['entity_id', 'commit_id', 'status', 'page', 'pageSize'])
+    const unknownParam = findUnknownQueryParam(searchParams, ['entity_id', 'commit_id', 'status', 'page', 'pageSize', ...SHAPING_PARAMS])
     if (unknownParam) {
       return NextResponse.json({ error: `Unknown query parameter: ${unknownParam}` }, { status: 400 })
     }
 
-    const pagination = parsePagination(searchParams)
+    const shaping = parseShaping(searchParams)
+    if (!shaping.ok) {
+      return NextResponse.json({ error: shaping.error }, { status: shaping.status })
+    }
+
+    const pagination = parsePagination(searchParams, shaping.distinct ? MAX_DISTINCT_PAGE_SIZE : 200)
     if (!pagination.ok) {
       return NextResponse.json({ error: pagination.error }, { status: pagination.status })
     }
@@ -52,6 +62,55 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: filterResult.error }, { status: filterResult.status })
     }
     const { whereClause, params } = filterResult
+
+    // A staged record's fields live in a JSON blob keyed by attribute code, and
+    // attribute codes are entity-scoped - so like attr.* filters, ?fields= and
+    // ?distinct= need entity_id. On this endpoint `fields` trims the keys of
+    // `data`/`previous_data`; the record envelope (id, status, ...) is always
+    // returned whole.
+    let fields: string[] | null = null
+    if (shaping.fields || shaping.distinct) {
+      const entityId = Number(searchParams.get('entity_id'))
+      if (!searchParams.get('entity_id')) {
+        return NextResponse.json({ error: 'entity_id is required when using fields or distinct' }, { status: 400 })
+      }
+      if (!Number.isInteger(entityId)) {
+        return NextResponse.json({ error: 'entity_id must be an integer' }, { status: 400 })
+      }
+
+      const attributes = await loadEntityAttributes(entityId)
+      const named = resolveNames(shaping.fields ?? [shaping.distinct!], attributes)
+      if (!named.ok) {
+        return NextResponse.json({ error: named.error }, { status: named.status })
+      }
+
+      if (shaping.distinct) {
+        const field = named.names[0]
+        const attr = attributes.get(field.toLowerCase())!
+        // Defense in depth: the code is interpolated into a JSON path.
+        if (!/^[a-zA-Z0-9_]+$/.test(attr.code)) {
+          return NextResponse.json({ error: `Invalid attribute code: ${attr.code}` }, { status: 400 })
+        }
+        const { values, total } = await queryDistinct({
+          source: 'mds_stage.staged_record r',
+          valueExpr: typedValueExpr(attr.data_type, `JSON_VALUE(r.data, '$.${attr.code}')`, attr.precision, attr.scale),
+          where: whereClause,
+          params,
+          offset,
+          pageSize,
+        })
+        return NextResponse.json({
+          field,
+          data: values.map(v => formatDistinctValue(v, attr.data_type)),
+          total,
+          page,
+          pageSize,
+          totalPages: Math.ceil(total / pageSize),
+        })
+      }
+
+      fields = named.names
+    }
 
     const countResult = await dbQuery<{ total: number }>(
       `SELECT COUNT(*) AS total FROM mds_stage.staged_record r ${whereClause}`,
@@ -71,11 +130,13 @@ export async function GET(request: NextRequest) {
       { ...params, offset, pageSize }
     )
 
+    const shape = (obj: Record<string, unknown>) => (fields ? pickFields(obj, fields) : obj)
+
     return NextResponse.json({
       data: results.map(r => ({
         ...r,
-        data: r.data ? JSON.parse(r.data) : {},
-        previous_data: r.previous_data ? JSON.parse(r.previous_data) : null,
+        data: shape(r.data ? JSON.parse(r.data) : {}),
+        previous_data: r.previous_data ? shape(JSON.parse(r.previous_data)) : null,
       })),
       total,
       page,

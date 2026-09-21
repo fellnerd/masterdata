@@ -65,9 +65,9 @@ export const openApiSpec = {
           description: { type: 'string', nullable: true },
           status: { type: 'string', enum: ['draft', 'active', 'deprecated'] },
           scd_type: { type: 'string', enum: ['SCD1', 'SCD2'] },
-          is_deployed: { type: 'boolean', description: 'True once the entity\'s mds_master table exists (derived, not stored)' },
-          last_deployed_at: { type: 'string', format: 'date-time', nullable: true, description: 'Most recent deployed commit / schema deployment' },
-          record_count: { type: 'integer', nullable: true, description: 'Current, non-deleted rows in mds_master; null if not deployed' },
+          is_deployed: { type: 'boolean', description: 'True once the entity\'s mds_master table exists (derived, not stored). Only on the single-entity GET, not the list.' },
+          last_deployed_at: { type: 'string', format: 'date-time', nullable: true, description: 'Most recent deployed commit / schema deployment. Only on the single-entity GET, not the list.' },
+          record_count: { type: 'integer', nullable: true, description: 'Current, non-deleted rows in mds_master; null if not deployed. Only on the single-entity GET, not the list.' },
           attribute_count: { type: 'integer' },
           attributes: { type: 'array', items: { $ref: '#/components/schemas/Attribute' } },
         },
@@ -115,6 +115,35 @@ export const openApiSpec = {
       },
     },
     parameters: {
+      Fields: {
+        name: 'fields',
+        in: 'query',
+        required: false,
+        description:
+          'Comma-separated list of fields to return, e.g. `fields=code,name,parent_code` - trims the payload of models with many attributes. ' +
+          'Only those fields appear in each row, in the order given; `total`/pagination are unaffected. ' +
+          'On `/master/{entityCode}` and `/views/{code}` any real column is allowed (attribute codes plus `business_key`, `valid_from`, ... - matched case-insensitively). ' +
+          'On `/stage/records` it trims the keys of `data`/`previous_data` (attribute codes; the record envelope such as `id`/`status` is always returned) ' +
+          'and requires `entity_id`. An unknown field returns 400. Cannot be combined with `distinct`.',
+        schema: { type: 'string' },
+        example: 'code,name',
+      },
+      Distinct: {
+        name: 'distinct',
+        in: 'query',
+        required: false,
+        description:
+          'Return the **unique values** of one field instead of rows - e.g. `distinct=country` for a dropdown. ' +
+          'Response: `{ field, data: [values], total, page, pageSize, totalPages }` (`total` = number of distinct values; `/master/{entityCode}` also carries `entity`). ' +
+          'Values are sorted ascending (numerically for integer/decimal), NULLs are left out, and text is compared case-insensitively ' +
+          '(`Abc` and `abc` are one value). Every filter of the endpoint still applies, so `attr.*` filters build cascading / lazy-loaded ' +
+          'dropdown hierarchies: `distinct=city&attr.country.exact=DE`. Paginated like rows, but `pageSize` may go up to 1000. ' +
+          'On `/stage/records` it requires `entity_id` and covers records of every status unless `status` is set. ' +
+          'Numbers, booleans and dates come back in their declared type; for those types a blank or unparseable value is ignored (an empty string in a text attribute is returned as `""`). ' +
+          'Cannot be combined with `fields`; an unknown field returns 400.',
+        schema: { type: 'string' },
+        example: 'country',
+      },
       AttrFilters: {
         name: 'attr.<code>',
         in: 'query',
@@ -467,23 +496,25 @@ export const openApiSpec = {
     '/stage/records': {
       get: {
         summary: 'List staged records',
-        description: 'Filter by `entity_id`, `commit_id`, `status`, and/or attribute-value filters (see `attr.<code>` below). Paginated, `pageSize` capped at 200. Any other query parameter name (e.g. `business_key`, which only exists on `/master/{entityCode}`) is rejected with 400 rather than silently ignored.',
+        description: 'Filter by `entity_id`, `commit_id`, `status`, and/or attribute-value filters (see `attr.<code>` below). Paginated, `pageSize` capped at 200. Any other query parameter name (e.g. `business_key`, which only exists on `/master/{entityCode}`) is rejected with 400 rather than silently ignored. `fields` trims the returned `data` keys, `distinct` returns the unique values of one attribute instead of records (both need `entity_id`).',
         tags: ['Staging'],
         security: [{ bearerAuth: ['stage:read'] }],
         parameters: [
-          { name: 'entity_id', in: 'query', schema: { type: 'integer' }, description: 'Required when using any attr.* filter' },
+          { name: 'entity_id', in: 'query', schema: { type: 'integer' }, description: 'Required when using any attr.* filter, `fields` or `distinct`' },
           { name: 'commit_id', in: 'query', schema: { type: 'integer' } },
           { name: 'status', in: 'query', schema: { type: 'string' } },
           { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
-          { name: 'pageSize', in: 'query', schema: { type: 'integer', default: 50, maximum: 200 } },
+          { name: 'pageSize', in: 'query', schema: { type: 'integer', default: 50, maximum: 200 }, description: 'Max 200 (1000 with `distinct`)' },
           { $ref: '#/components/parameters/AttrFilters' },
+          { $ref: '#/components/parameters/Fields' },
+          { $ref: '#/components/parameters/Distinct' },
         ],
         responses: {
           200: {
-            description: 'OK',
+            description: 'OK - a page of records, or (with `distinct`) `{ field, data: [values], total, page, pageSize, totalPages }`',
             content: { 'application/json': { schema: { type: 'object', properties: { data: { type: 'array', items: { $ref: '#/components/schemas/StagedRecord' } }, total: { type: 'integer' }, page: { type: 'integer' }, pageSize: { type: 'integer' }, totalPages: { type: 'integer' } } } } },
           },
-          400: { description: 'entity_id missing for attr.* filter, unknown attribute code, unknown query parameter, or invalid page/pageSize', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          400: { description: 'entity_id missing for attr.*/fields/distinct, unknown attribute code or field, fields combined with distinct, unknown query parameter, or invalid page/pageSize', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },
       post: {
@@ -572,19 +603,21 @@ export const openApiSpec = {
       ],
       get: {
         summary: 'Read deployed master data rows (read-only)',
-        description: 'Supports attribute-value filters (see `attr.<code>` below) alongside `business_key` - `business_key` stays the fast/simple path for an exact-key lookup, `attr.*` covers everything else (e.g. cascading dropdown filters over `field_of_application`/`classification_system`/`classification`). Values come back in their declared type (integer/decimal as JSON numbers, boolean as booleans, empty as null) even though the master table stores them as text.',
+        description: 'Supports attribute-value filters (see `attr.<code>` below) alongside `business_key` - `business_key` stays the fast/simple path for an exact-key lookup, `attr.*` covers everything else (e.g. cascading dropdown filters over `field_of_application`/`classification_system`/`classification`). Values come back in their declared type (integer/decimal as JSON numbers, boolean as booleans, empty as null) even though the master table stores them as text. `fields=a,b` trims each row to those columns (big models); `distinct=<field>` returns the unique values of one column instead of rows - with `attr.*` filters that is the building block for cascading / lazy-loaded dropdowns (`distinct=classification_system&attr.field_of_application.exact=bu`).',
         tags: ['Master Data'],
         security: [{ bearerAuth: ['master:read'] }],
         parameters: [
           { name: 'business_key', in: 'query', schema: { type: 'string' } },
           { name: 'history', in: 'query', schema: { type: 'boolean', default: false }, description: 'Include historized/deleted rows' },
           { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
-          { name: 'pageSize', in: 'query', schema: { type: 'integer', default: 50, maximum: 200 } },
+          { name: 'pageSize', in: 'query', schema: { type: 'integer', default: 50, maximum: 200 }, description: 'Max 200 (1000 with `distinct`)' },
           { $ref: '#/components/parameters/AttrFilters' },
+          { $ref: '#/components/parameters/Fields' },
+          { $ref: '#/components/parameters/Distinct' },
         ],
         responses: {
-          200: { description: 'OK' },
-          400: { description: 'Unknown attribute code, unknown query parameter, or invalid page/pageSize', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          200: { description: 'OK - `{ entity, data, total, page, pageSize, totalPages }`; with `distinct`, `data` is the array of unique values and `field` names it' },
+          400: { description: 'Unknown attribute code or field, fields combined with distinct, unknown query parameter, or invalid page/pageSize', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           404: { description: 'Unknown entity or not yet deployed', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           409: { description: 'Ambiguous code across models - add model_code', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
@@ -606,17 +639,19 @@ export const openApiSpec = {
       parameters: [{ name: 'code', in: 'path', required: true, schema: { type: 'string' } }],
       get: {
         summary: 'Read view rows (read-only)',
-        description: 'Supports attribute-value filters (see `attr.<code>` below), scoped to the view\'s underlying entity\'s attributes. A (re)deployed view exposes each attribute in its declared type (integer/decimal/boolean/date/datetime; a value that does not parse becomes NULL); a view deployed before that change keeps text columns until it is redeployed.',
+        description: 'Supports attribute-value filters (see `attr.<code>` below), scoped to the view\'s underlying entity\'s attributes. A (re)deployed view exposes each attribute in its declared type (integer/decimal/boolean/date/datetime; a blank or unparseable value becomes NULL); a view deployed before that change keeps text columns until it is redeployed. `fields=a,b` trims each row to those columns; `distinct=<field>` returns the unique values of one column instead of rows (see the `distinct` parameter).',
         tags: ['Views'],
         security: [{ bearerAuth: ['views:read'] }],
         parameters: [
           { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
-          { name: 'pageSize', in: 'query', schema: { type: 'integer', default: 50, maximum: 200 } },
+          { name: 'pageSize', in: 'query', schema: { type: 'integer', default: 50, maximum: 200 }, description: 'Max 200 (1000 with `distinct`)' },
           { $ref: '#/components/parameters/AttrFilters' },
+          { $ref: '#/components/parameters/Fields' },
+          { $ref: '#/components/parameters/Distinct' },
         ],
         responses: {
-          200: { description: 'OK' },
-          400: { description: 'Unknown attribute code, unknown query parameter, or invalid page/pageSize', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          200: { description: 'OK - `{ data, total, page, pageSize, totalPages }`; with `distinct`, `data` is the array of unique values and `field` names it' },
+          400: { description: 'Unknown attribute code or field, fields combined with distinct, unknown query parameter, or invalid page/pageSize', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           404: { description: 'Unknown view', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },
