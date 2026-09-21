@@ -270,7 +270,16 @@ def generate_model_sql(entity, attributes):
     
     # Spalten für SELECT generieren
     select_columns = ",\n        ".join(columns)
-    
+
+    # SCD1-Entities führen KEINE Historie: die Version wird überschrieben, ein
+    # Delete entfernt die Zeile. (scd_type wurde hier früher gar nicht ausgewertet -
+    # jede Entity wurde wie SCD2 historisiert, auch eine als SCD1 angelegte.)
+    if str(entity.get('scd_type') or 'SCD2').upper() == 'SCD1':
+        return generate_model_sql_scd1(
+            entity, entity_code, entity_id, load_table, master_table,
+            load_model_ref, columns, select_columns
+        )
+
     # Model SQL - angepasst an mds_load Spaltenstruktur
     # mds_load.<entity> hat: id, business_key_hash, business_key, <attrs>, commit_id, operation, source_system, source_id, is_processed, created_at, processed_at
     # WICHTIG: alias OHNE Brackets, dbt-sqlserver escaped automatisch
@@ -425,6 +434,133 @@ WHERE is_processed = 0
 '''
 
     return model_sql
+
+
+def generate_model_sql_scd1(entity, entity_code, entity_id, load_table, master_table,
+                            load_model_ref, columns, select_columns):
+    """Master-Model für eine SCD1-Entity: nur der aktuelle Stand, keine Historie.
+
+    Gleiche Tabellenstruktur wie SCD2 (valid_from/valid_to/is_current/is_deleted bleiben,
+    Views und API erwarten sie) - aber pro Business Key existiert immer genau EINE Zeile:
+    - pre_hook löscht ALLE vorhandenen Zeilen der Keys, die in diesem Lauf ankommen
+      (statt sie mit valid_to zu schließen),
+    - ein DELETE fügt keine Tombstone-Zeile ein - der Key ist danach schlicht weg,
+    - is_current ist immer 1, is_deleted immer 0.
+    """
+
+    return f'''{{{{
+  config(
+    materialized='incremental',
+    schema='mds_master',
+    alias='{entity_code}',
+    incremental_strategy='append',
+    on_schema_change='sync_all_columns',
+    as_columnstore=false,
+    pre_hook=[
+      "{{% if is_incremental() %}}
+      -- SCD1: in place ueberschreiben - alle vorhandenen Zeilen der ankommenden Keys entfernen (keine Historie)
+      DELETE FROM {master_table}
+      WHERE business_key IN (
+        SELECT business_key
+        FROM {load_table}
+        WHERE is_processed = 0
+          AND operation IN ('UPDATE', 'DELETE', 'INSERT', 'UPSERT')
+      )
+      {{% endif %}}"
+    ],
+    post_hook=[
+      "-- Mark load records as processed",
+      "UPDATE {load_table} SET is_processed = 1, processed_at = GETUTCDATE() WHERE is_processed = 0",
+      "-- Update commit status to 'deployed' for all loaded commits",
+      "UPDATE mds_stage.[commit] SET status = 'deployed' WHERE status = 'loaded' AND entity_id = {entity_id}{COMMIT_FILTER_PLAIN}",
+      "-- Remove DELETE records from load (they should not appear in current state)",
+      "DELETE FROM {load_table} WHERE operation = 'DELETE'",
+      "-- Guard: never more than one row per business key (warn, don't fail, if existing data already violates it)",
+      "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_{entity_code}_current' AND object_id = OBJECT_ID('{master_table}')) BEGIN BEGIN TRY CREATE UNIQUE NONCLUSTERED INDEX UX_{entity_code}_current ON {master_table} (business_key_hash) WHERE is_current = 1 END TRY BEGIN CATCH PRINT 'Could not create UX_{entity_code}_current - {master_table} already has more than one current row for some business key: ' + ERROR_MESSAGE() END CATCH END"
+    ]
+  )
+}}}}
+
+{{#
+  =====================================================
+  MDS Master: {entity['name']}  (SCD1 - keine Historie)
+  =====================================================
+
+  Entity Code: {entity_code}
+  Generated:   {datetime.now().isoformat()}
+
+  Source: {load_table}
+  Target: {master_table} (SCD1 - nur aktueller Stand)
+
+  Columns: {', '.join(columns)}
+  =====================================================
+#}}
+
+{{% if is_incremental() %}}
+
+-- Incremental: unverarbeitete Records aus der Load-Tabelle. Pro Business Key nur der
+-- neueste Load-Satz; ein DELETE erzeugt keine neue Zeile (der pre_hook hat den Key schon entfernt).
+WITH source_all AS (
+    SELECT
+        CAST(source_id AS BIGINT) AS load_id,
+        business_key,
+        business_key_hash,
+        operation,
+        {select_columns},
+        commit_id,
+        source_system,
+        source_id,
+        created_at,
+        ROW_NUMBER() OVER (PARTITION BY business_key ORDER BY CAST(source_id AS BIGINT) DESC) AS rn
+    FROM {load_model_ref}
+    WHERE is_processed = 0
+)
+
+SELECT
+    business_key,
+    business_key_hash,
+    {select_columns},
+    created_at AS valid_from,
+    CAST('9999-12-31' AS DATETIME2) AS valid_to,
+    CAST(1 AS BIT) AS is_current,
+    CAST(0 AS BIT) AS is_deleted,
+    commit_id,
+    source_system,
+    source_id,
+    CAST(load_id AS BIGINT) AS source_load_id,
+    GETUTCDATE() AS created_at,
+    'dbt' AS created_by,
+    CAST(NULL AS DATETIME2) AS updated_at,
+    CAST(NULL AS NVARCHAR(100)) AS updated_by
+FROM source_all
+WHERE rn = 1
+  AND operation <> 'DELETE'
+
+{{% else %}}
+
+-- Full Refresh: alle Records (ohne Deletes)
+SELECT
+    business_key,
+    business_key_hash,
+    {select_columns},
+    created_at AS valid_from,
+    CAST('9999-12-31' AS DATETIME2) AS valid_to,
+    CAST(1 AS BIT) AS is_current,
+    CAST(0 AS BIT) AS is_deleted,
+    commit_id,
+    source_system,
+    source_id,
+    CAST(source_id AS BIGINT) AS source_load_id,
+    GETUTCDATE() AS created_at,
+    'dbt' AS created_by,
+    CAST(NULL AS DATETIME2) AS updated_at,
+    CAST(NULL AS NVARCHAR(100)) AS updated_by
+FROM {load_model_ref}
+WHERE is_processed = 0
+  AND operation <> 'DELETE'
+
+{{% endif %}}
+'''
 
 
 def generate_load_model_sql(entity, attributes):
