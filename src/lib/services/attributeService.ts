@@ -2,7 +2,7 @@ import { dbQuery, dbExecute } from '@/lib/db-server'
 import type { ServiceResult } from './types'
 import { upsertSchemaDeployment } from './schemaDeployment'
 import { redeployViewsForEntity } from './viewDeployService'
-import { validateReferenceConfig, normalizeReferenceConfig, findValueAttributeUsage } from '@/lib/referenceConfig'
+import { validateReferenceConfig, normalizeReferenceConfig } from '@/lib/referenceConfig'
 
 export interface Attribute {
   id: number
@@ -26,9 +26,7 @@ export interface Attribute {
   default_value: string | null
   reference_entity_id: number | null
   reference_entity_code?: string | null
-  /** Attribute (code) of the referenced entity stored as this attribute's value; null = its business key. */
-  reference_value_attribute: string | null
-  /** Attribute (code) of the referenced entity shown in the dropdown; null = same as the value. */
+  /** Attribute (code) of the referenced entity shown in the dropdown; null = its business key (always what is stored). */
   reference_display_attribute: string | null
   /** Attribute (code) of THIS entity whose value narrows the dropdown (cascade); null = no cascade. */
   cascade_parent_attribute: string | null
@@ -64,7 +62,6 @@ export async function listAttributes(entityId?: number): Promise<ServiceResult<A
       a.default_value,
       a.reference_entity_id,
       ref.code AS reference_entity_code,
-      a.reference_value_attribute,
       a.reference_display_attribute,
       a.cascade_parent_attribute,
       a.cascade_filter_attribute,
@@ -126,7 +123,6 @@ export interface CreateAttributeInput {
   is_unique?: boolean
   default_value?: string | null
   reference_entity_id?: number | null
-  reference_value_attribute?: string | null
   reference_display_attribute?: string | null
   cascade_parent_attribute?: string | null
   cascade_filter_attribute?: string | null
@@ -152,7 +148,6 @@ export async function createAttribute(input: CreateAttributeInput): Promise<Serv
     is_unique = false,
     default_value,
     reference_entity_id,
-    reference_value_attribute,
     reference_display_attribute,
     cascade_parent_attribute,
     cascade_filter_attribute,
@@ -184,7 +179,6 @@ export async function createAttribute(input: CreateAttributeInput): Promise<Serv
   const refCfg = normalizeReferenceConfig({
     data_type,
     reference_entity_id: reference_entity_id ?? null,
-    reference_value_attribute: reference_value_attribute ?? null,
     reference_display_attribute: reference_display_attribute ?? null,
     cascade_parent_attribute: cascade_parent_attribute ?? null,
     cascade_filter_attribute: cascade_filter_attribute ?? null,
@@ -210,11 +204,11 @@ export async function createAttribute(input: CreateAttributeInput): Promise<Serv
     `INSERT INTO [mds_meta].[attribute]
       (entity_id, code, name, description, data_type, sql_type, max_length, [precision], scale,
        is_required, is_business_key, is_unique, default_value, reference_entity_id,
-       reference_value_attribute, reference_display_attribute, cascade_parent_attribute, cascade_filter_attribute,
+       reference_display_attribute, cascade_parent_attribute, cascade_filter_attribute,
        validation_regex, sort_order, created_by, updated_by)
      VALUES (@entityId, @code, @name, @description, @dataType, @sqlType, @maxLength, @precision, @scale,
              @isRequired, @isBusinessKey, @isUnique, @defaultValue, @referenceEntityId,
-             @refValueAttr, @refDisplayAttr, @cascadeParent, @cascadeFilter,
+             @refDisplayAttr, @cascadeParent, @cascadeFilter,
              @validationRegex, @sortOrder, @user, @user)`,
     {
       entityId: entity_id,
@@ -231,7 +225,6 @@ export async function createAttribute(input: CreateAttributeInput): Promise<Serv
       isUnique: is_unique,
       defaultValue: default_value || null,
       referenceEntityId: reference_entity_id || null,
-      refValueAttr: refCfg.reference_value_attribute,
       refDisplayAttr: refCfg.reference_display_attribute,
       cascadeParent: refCfg.cascade_parent_attribute,
       cascadeFilter: refCfg.cascade_filter_attribute,
@@ -267,7 +260,6 @@ export interface UpdateAttributeInput {
   is_unique?: boolean
   default_value?: string | null
   reference_entity_id?: number | null
-  reference_value_attribute?: string | null
   reference_display_attribute?: string | null
   cascade_parent_attribute?: string | null
   cascade_filter_attribute?: string | null
@@ -288,7 +280,7 @@ export async function updateAttribute(
   const {
     code, name, description, data_type, sql_type, max_length, precision, scale,
     is_required, is_business_key, is_unique, default_value, reference_entity_id,
-    reference_value_attribute, reference_display_attribute, cascade_parent_attribute, cascade_filter_attribute,
+    reference_display_attribute, cascade_parent_attribute, cascade_filter_attribute,
     validation_regex, sort_order, updated_by = 'admin'
   } = input
 
@@ -307,7 +299,6 @@ export async function updateAttribute(
   if (is_unique !== undefined) { updates.push('is_unique = @is_unique'); queryParams.is_unique = is_unique }
   if (default_value !== undefined) { updates.push('default_value = @default_value'); queryParams.default_value = default_value }
   if (reference_entity_id !== undefined) { updates.push('reference_entity_id = @reference_entity_id'); queryParams.reference_entity_id = reference_entity_id }
-  if (reference_value_attribute !== undefined) { updates.push('reference_value_attribute = @reference_value_attribute'); queryParams.reference_value_attribute = reference_value_attribute || null }
   if (reference_display_attribute !== undefined) { updates.push('reference_display_attribute = @reference_display_attribute'); queryParams.reference_display_attribute = reference_display_attribute || null }
   if (cascade_parent_attribute !== undefined) { updates.push('cascade_parent_attribute = @cascade_parent_attribute'); queryParams.cascade_parent_attribute = cascade_parent_attribute || null }
   if (cascade_filter_attribute !== undefined) { updates.push('cascade_filter_attribute = @cascade_filter_attribute'); queryParams.cascade_filter_attribute = cascade_filter_attribute || null }
@@ -316,10 +307,10 @@ export async function updateAttribute(
 
   const attrResult = await dbQuery<{
     entity_id: number; code: string; data_type: string; precision: number | null; scale: number | null
-    reference_entity_id: number | null; reference_value_attribute: string | null; reference_display_attribute: string | null
+    reference_entity_id: number | null; reference_display_attribute: string | null
     cascade_parent_attribute: string | null; cascade_filter_attribute: string | null
   }>(
-    `SELECT entity_id, code, data_type, [precision], scale, reference_entity_id, reference_value_attribute,
+    `SELECT entity_id, code, data_type, [precision], scale, reference_entity_id,
             reference_display_attribute, cascade_parent_attribute, cascade_filter_attribute
      FROM mds_meta.attribute WHERE id = @id`,
     { id }
@@ -350,14 +341,13 @@ export async function updateAttribute(
   // Validate the reference/cascade setup as it will be AFTER this update
   // (merge the incoming fields over the stored ones).
   const touchesReferenceConfig =
-    reference_value_attribute !== undefined || reference_display_attribute !== undefined ||
+    reference_display_attribute !== undefined ||
     cascade_parent_attribute !== undefined || cascade_filter_attribute !== undefined ||
     data_type !== undefined || reference_entity_id !== undefined
   if (touchesReferenceConfig) {
     const refError = await validateReferenceConfig(entityId, current.code, {
       data_type: data_type ?? current.data_type,
       reference_entity_id: reference_entity_id !== undefined ? reference_entity_id : current.reference_entity_id,
-      reference_value_attribute: reference_value_attribute !== undefined ? reference_value_attribute : current.reference_value_attribute,
       reference_display_attribute: reference_display_attribute !== undefined ? reference_display_attribute : current.reference_display_attribute,
       cascade_parent_attribute: cascade_parent_attribute !== undefined ? cascade_parent_attribute : current.cascade_parent_attribute,
       cascade_filter_attribute: cascade_filter_attribute !== undefined ? cascade_filter_attribute : current.cascade_filter_attribute,
@@ -427,13 +417,6 @@ export async function deleteAttribute(
   }
   const entityId = attrResult[0].entity_id
   const attrCode = attrResult[0].code
-
-  // Another reference attribute STORES this attribute's value - deleting it
-  // would silently change what that attribute means, so refuse.
-  const usage = await findValueAttributeUsage(entityId, attrCode)
-  if (usage) {
-    return { ok: false, status: 400, error: usage }
-  }
 
   await dbExecute('DELETE FROM mds_meta.attribute WHERE id = @id', { id })
 

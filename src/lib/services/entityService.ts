@@ -58,7 +58,6 @@ interface AttributeSummary {
   is_business_key: boolean
   sort_order: number
   reference_entity_id: number | null
-  reference_value_attribute: string | null
   reference_display_attribute: string | null
   cascade_parent_attribute: string | null
   cascade_filter_attribute: string | null
@@ -173,7 +172,7 @@ export async function getEntity(id: number): Promise<ServiceResult<Entity & { at
 
   const attributes = await dbQuery<AttributeSummary>(
     `SELECT id, code, name, data_type, is_required, is_business_key, sort_order,
-            reference_entity_id, reference_value_attribute, reference_display_attribute,
+            reference_entity_id, reference_display_attribute,
             cascade_parent_attribute, cascade_filter_attribute
      FROM mds_meta.attribute
      WHERE entity_id = @entityId

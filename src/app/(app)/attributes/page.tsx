@@ -46,7 +46,6 @@ interface Attribute {
   default_value: string | null;
   reference_entity_id: number | null;
   reference_entity_code: string | null;
-  reference_value_attribute: string | null;
   reference_display_attribute: string | null;
   cascade_parent_attribute: string | null;
   cascade_filter_attribute: string | null;
@@ -71,14 +70,12 @@ interface Summary {
 }
 
 interface ReferenceSettings {
-  value_attribute: string;     // '' = business key
-  display_attribute: string;   // '' = same as the stored value
+  display_attribute: string;   // '' = business key (what is stored)
   cascade_parent: string;      // '' = no cascade
   cascade_filter: string;
 }
 
 const NO_REFERENCE_SETTINGS: ReferenceSettings = {
-  value_attribute: '',
   display_attribute: '',
   cascade_parent: '',
   cascade_filter: '',
@@ -106,10 +103,6 @@ function ReferenceSettingsFields({
   const ownAttrs = attributes.filter((a) => a.entity_id === ownEntityId && a.code !== ownCode);
   if (!referencedEntityId || refAttrs.length === 0) return null;
 
-  // Only attributes that identify a record uniquely can be the stored value
-  // (the server enforces the same rule).
-  const businessKeyCount = refAttrs.filter((a) => a.is_business_key).length;
-  const valueCandidates = refAttrs.filter((a) => a.is_unique || (a.is_business_key && businessKeyCount === 1));
   const label = (a: Attribute) => `${a.name} (${a.code})`;
 
   const pickParent = (code: string) => {
@@ -131,26 +124,9 @@ function ReferenceSettingsFields({
   return (
     <div style={{ borderLeft: '3px solid var(--blue3)', paddingLeft: 12, marginBottom: 12 }}>
       <FormGroup
-        label="Gespeicherter Wert"
-        labelFor="ref-value-attr"
-        helperText="Welches Feld der referenzierten Entity im Datensatz gespeichert wird. Bestehende Datensätze behalten ihren Wert."
-      >
-        <HTMLSelect
-          id="ref-value-attr"
-          fill
-          value={value.value_attribute}
-          onChange={(e) => onChange({ ...value, value_attribute: e.target.value })}
-        >
-          <option value="">Business Key (Standard)</option>
-          {valueCandidates.map((a) => (
-            <option key={a.code} value={a.code}>{label(a)}</option>
-          ))}
-        </HTMLSelect>
-      </FormGroup>
-      <FormGroup
         label="Anzeige im Dropdown"
         labelFor="ref-display-attr"
-        helperText="Welches Feld in der Auswahlliste angezeigt wird (gespeichert wird weiterhin der oben gewählte Wert)."
+        helperText="Welches Feld der referenzierten Entity in der Auswahlliste angezeigt wird. Gespeichert wird immer der Business Key."
       >
         <HTMLSelect
           id="ref-display-attr"
@@ -158,7 +134,7 @@ function ReferenceSettingsFields({
           value={value.display_attribute}
           onChange={(e) => onChange({ ...value, display_attribute: e.target.value })}
         >
-          <option value="">Wie gespeicherter Wert (Standard)</option>
+          <option value="">Business Key (Standard)</option>
           {refAttrs.map((a) => (
             <option key={a.code} value={a.code}>{label(a)}</option>
           ))}
@@ -438,7 +414,6 @@ function AttributesPageInner() {
           description: newAttribute.description || null,
           reference_entity_id: newAttribute.data_type === 'reference' ? newAttribute.reference_entity_id : null,
           ...(newAttribute.data_type === 'reference' && {
-            reference_value_attribute: newAttribute.reference.value_attribute || null,
             reference_display_attribute: newAttribute.reference.display_attribute || null,
             cascade_parent_attribute: newAttribute.reference.cascade_parent || null,
             cascade_filter_attribute: newAttribute.reference.cascade_parent ? newAttribute.reference.cascade_filter || null : null,
@@ -483,7 +458,6 @@ function AttributesPageInner() {
       is_business_key: attr.is_business_key,
       max_length: attr.max_length?.toString() || '',
       reference: {
-        value_attribute: attr.reference_value_attribute || '',
         display_attribute: attr.reference_display_attribute || '',
         cascade_parent: attr.cascade_parent_attribute || '',
         cascade_filter: attr.cascade_filter_attribute || '',
@@ -509,7 +483,6 @@ function AttributesPageInner() {
           is_business_key: editAttribute.is_business_key,
           max_length: editAttribute.max_length ? parseInt(editAttribute.max_length) : null,
           ...(selectedAttribute.data_type === 'reference' && {
-            reference_value_attribute: editAttribute.reference.value_attribute || null,
             reference_display_attribute: editAttribute.reference.display_attribute || null,
             cascade_parent_attribute: editAttribute.reference.cascade_parent || null,
             cascade_filter_attribute: editAttribute.reference.cascade_parent ? editAttribute.reference.cascade_filter || null : null,
@@ -740,11 +713,6 @@ function AttributesPageInner() {
                           <Tag icon="link" minimal interactive>
                             {attr.reference_entity_code}
                           </Tag>
-                          {attr.reference_value_attribute && (
-                            <Tooltip content="Gespeicherter Wert (statt Business Key)">
-                              <Tag minimal>Wert: {attr.reference_value_attribute}</Tag>
-                            </Tooltip>
-                          )}
                           {attr.reference_display_attribute && (
                             <Tooltip content="Angezeigtes Feld im Dropdown">
                               <Tag minimal>Anzeige: {attr.reference_display_attribute}</Tag>

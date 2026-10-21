@@ -51,7 +51,6 @@ interface Attribute {
   is_business_key: boolean
   reference_entity_id: number | null
   reference_entity_code?: string | null
-  reference_value_attribute?: string | null
   reference_display_attribute?: string | null
   cascade_parent_attribute?: string | null
   cascade_filter_attribute?: string | null
@@ -293,7 +292,6 @@ function DataEntryPageInner() {
           id={fieldId}
           referencedEntityId={attr.reference_entity_id}
           referencedEntityName={attr.reference_entity_code || undefined}
-          valueAttribute={attr.reference_value_attribute}
           displayAttribute={attr.reference_display_attribute}
           cascadeFilter={cascadeFilter}
           value={String(values[attr.code] ?? '')}
@@ -767,7 +765,6 @@ function DataEntryPageInner() {
                       id={`filter-${attr.code}`}
                       referencedEntityId={attr.reference_entity_id}
                       referencedEntityName={attr.reference_entity_code || undefined}
-                      valueAttribute={attr.reference_value_attribute}
                       displayAttribute={attr.reference_display_attribute}
                       value={attributeFilters[key] ?? ''}
                       onChange={(v) => update({ [key]: v })}

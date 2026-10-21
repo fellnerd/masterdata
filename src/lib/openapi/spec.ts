@@ -5,19 +5,11 @@
 // Settings of a `reference` attribute beyond the referenced entity - shared by the
 // attribute schema and its create/update request bodies.
 const referenceSettingProps = {
-  reference_value_attribute: {
-    type: 'string',
-    nullable: true,
-    description:
-      'Attribute (code) of the referenced entity whose value is STORED. Default (null): the referenced record\'s business key. ' +
-      'Must identify a record uniquely: the attribute needs `is_unique`, or be the referenced entity\'s only business key. ' +
-      'Staged values are validated against it. Existing records keep the value they have.',
-  },
   reference_display_attribute: {
     type: 'string',
     nullable: true,
     description:
-      'Attribute (code) of the referenced entity shown in dropdowns (UI only - the stored value stays `reference_value_attribute`/the business key). Default (null): the stored value.',
+      'Attribute (code) of the referenced entity shown in dropdowns (UI only - what is stored is always the referenced record\'s business key). Default (null): the business key.',
   },
   cascade_parent_attribute: {
     type: 'string',
@@ -31,7 +23,7 @@ const referenceSettingProps = {
     nullable: true,
     description:
       'Cascading dropdown: code of the attribute of the REFERENCED entity that must equal the parent\'s value (e.g. the Untergruppen entity\'s own "Hauptgruppe" reference). ' +
-      'If both it and the parent are references they must point at the same entity and store the same field.',
+      'If both it and the parent are references they must point at the same entity (both hold that entity\'s business keys).',
   },
 } as const
 
@@ -469,7 +461,7 @@ export const openApiSpec = {
         },
         responses: {
           201: { description: 'Created', content: { 'application/json': { schema: { $ref: '#/components/schemas/Attribute' } } } },
-          400: { description: 'Invalid reference/cascade settings (unknown attribute, parent = itself or a loop, parent and filter that can never match, value attribute that is not unique, settings on a non-reference attribute)', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          400: { description: 'Invalid reference/cascade settings (unknown attribute, parent = itself or a loop, parent and filter that can never match, settings on a non-reference attribute)', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           403: { description: 'Missing scope or not admin', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           404: { description: 'Entity not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           409: { description: 'Code already exists on this entity', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
@@ -554,7 +546,7 @@ export const openApiSpec = {
       },
       delete: {
         summary: 'Delete an attribute',
-        description: 'Requires an admin token (checked live). Refused (400) while another reference attribute stores this attribute as its value (`reference_value_attribute`); display/cascade settings that pointed at it are cleared. Staged data is not checked - values already stored for the attribute are orphaned. The entity\'s currently-deployed views are regenerated immediately so they stop selecting the removed column (`views_redeployed`); a view that could not be regenerated is reported in `warnings`.',
+        description: 'Requires an admin token (checked live). Display/cascade settings of other reference attributes that pointed at it are cleared. Staged data is not checked - values already stored for the attribute are orphaned. The entity\'s currently-deployed views are regenerated immediately so they stop selecting the removed column (`views_redeployed`); a view that could not be regenerated is reported in `warnings`.',
         tags: ['Attributes'],
         security: [{ bearerAuth: ['attributes:write'] }],
         responses: {

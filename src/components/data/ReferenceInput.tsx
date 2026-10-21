@@ -17,9 +17,7 @@ interface ReferenceInputProps {
   value: string
   onChange: (value: string) => void
   intent?: 'primary' | 'none'
-  /** Attribute of the referenced entity that is stored as the value; omitted = its business key. */
-  valueAttribute?: string | null
-  /** Attribute of the referenced entity shown in the list; omitted = the value itself. */
+  /** Attribute of the referenced entity shown in the list; omitted = its business key. The stored value is always the business key. */
   displayAttribute?: string | null
   /**
    * Cascade: only offer records whose `attribute` equals `value`. Pass undefined while the
@@ -40,7 +38,7 @@ const text = (v: unknown) => (v === undefined || v === null ? '' : String(v))
 // filter the server already narrows the list to the selected parent.
 export function ReferenceInput({
   id, referencedEntityId, referencedEntityName, value, onChange, intent,
-  valueAttribute, displayAttribute, cascadeFilter,
+  displayAttribute, cascadeFilter,
 }: ReferenceInputProps) {
   const [candidates, setCandidates] = useState<ReferenceRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -78,20 +76,18 @@ export function ReferenceInput({
     return () => { cancelled = true }
   }, [referencedEntityId, filterAttribute, filterValue])
 
-  const valueOf = (c: ReferenceRecord) => (valueAttribute ? text(c.data[valueAttribute]) : c.business_key)
+  const valueOf = (c: ReferenceRecord) => c.business_key
   const labelOf = (c: ReferenceRecord) => {
     const label = displayAttribute ? text(c.data[displayAttribute]) : ''
     return label || valueOf(c)
   }
 
-  // Records that don't carry the configured value attribute can't be selected
-  // (there'd be nothing to store); sorted by what the user reads.
+  // Sorted by what the user reads.
   const items = useMemo(
-    () => candidates
-      .filter(c => valueOf(c) !== '')
+    () => [...candidates]
       .sort((a, b) => labelOf(a).localeCompare(labelOf(b), undefined, { numeric: true, sensitivity: 'base' })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [candidates, valueAttribute, displayAttribute]
+    [candidates, displayAttribute]
   )
 
   const matched = value ? items.find(c => valueOf(c) === value) : undefined
@@ -100,7 +96,7 @@ export function ReferenceInput({
   // that no longer matches anything (stale/legacy reference, or a parent that
   // changed underneath it) still display as text instead of silently going blank.
   const selectedItem: ReferenceRecord | null = value
-    ? (matched ?? { id: -1, business_key: value, data: valueAttribute ? { [valueAttribute]: value } : {} })
+    ? (matched ?? { id: -1, business_key: value, data: {} })
     : null
   const isUnmatched = !!value && !matched && !loading
 

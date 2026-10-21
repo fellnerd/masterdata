@@ -113,13 +113,8 @@ CREATE TABLE mds_meta.attribute (
     CONSTRAINT UQ__attribute__entity_code UNIQUE (entity_id, code)
 );
 
--- Reference attributes: which attribute of the referenced entity is STORED as
--- the value (NULL = the referenced record's business key, the original
--- behaviour) and which one is SHOWN in the dropdown (NULL = same as the value).
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('mds_meta.attribute') AND name = 'reference_value_attribute')
-BEGIN
-    ALTER TABLE mds_meta.attribute ADD reference_value_attribute NVARCHAR(100) NULL;
-END
+-- Reference attributes: which attribute of the referenced entity is SHOWN in
+-- the dropdown (NULL = its business key; what is stored is always the key).
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('mds_meta.attribute') AND name = 'reference_display_attribute')
 BEGIN
     ALTER TABLE mds_meta.attribute ADD reference_display_attribute NVARCHAR(100) NULL;

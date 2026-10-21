@@ -123,22 +123,22 @@ return a clean `400` rather than a database error.
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/v1/attributes?entity_id=` | `entity_id` is **required**. Lists that entity's attributes standalone (same data also embedded in `GET /api/v1/entities`). |
-| POST | `/api/v1/attributes` | Body: `{ entity_id, code, name, data_type?, is_required?, is_business_key?, is_unique?, reference_entity_id?, reference_value_attribute?, reference_display_attribute?, cascade_parent_attribute?, cascade_filter_attribute?, sort_order? }`. `data_type` one of `string`, `integer`, `decimal`, `boolean`, `date`, `datetime`, `reference`; `reference_entity_id` required when `data_type` is `reference`; the four `reference_*`/`cascade_*` settings only apply to references (see "Reference attributes" below). Without `sort_order` the attribute is appended after the entity's last one. Admin token required. |
+| POST | `/api/v1/attributes` | Body: `{ entity_id, code, name, data_type?, is_required?, is_business_key?, is_unique?, reference_entity_id?, reference_display_attribute?, cascade_parent_attribute?, cascade_filter_attribute?, sort_order? }`. `data_type` one of `string`, `integer`, `decimal`, `boolean`, `date`, `datetime`, `reference`; `reference_entity_id` required when `data_type` is `reference`; the `reference_display_attribute`/`cascade_*` settings only apply to references (see "Reference attributes" below). Without `sort_order` the attribute is appended after the entity's last one. Admin token required. |
 | PUT | `/api/v1/attributes/reorder` | Body: `{ entity_id, order: [attributeId, ...] }` - every attribute id of the entity exactly once, in the desired order (positions become 10, 20, 30, ...). This is the field order of the data-entry form. Admin token required. `400` if `order` isn't exactly the entity's attribute ids; `409` if it would change the relative order of the **business-key** attributes of an entity that already has records (composite business keys are built in that order, so new keys would stop matching stored ones) - moving any other attribute, also across the key attributes, is always fine. |
 | GET | `/api/v1/attributes/{id}` | Single attribute by numeric id |
 | PUT | `/api/v1/attributes/{id}` | Partial update, same fields as POST. Admin token required. Returns the full updated attribute. **`code` is immutable**: a different `code` returns `400` (it used to be silently ignored) - to "rename", create a new attribute and delete the old one (values are not carried over). Sending the unchanged `code` is accepted. Changing `data_type`/`precision`/`scale` regenerates the entity's deployed views. |
 | DELETE | `/api/v1/attributes/{id}` | Admin token required. No dependency checks - deleting an attribute referenced elsewhere (e.g. by staged data) can orphan data, unlike Entity delete. The entity's currently-deployed views are regenerated right away so they stop selecting the dropped column (response: `views_redeployed`, plus `warnings` if one couldn't be regenerated) - previously the view returned `500 Invalid column name` until someone redeployed. |
 
-#### Reference attributes: stored value, dropdown label, cascading dropdowns
+#### Reference attributes: dropdown label and cascading dropdowns
 
-A `reference` attribute stores a pointer to a record of another entity. Three
-optional settings (on `POST`/`PUT /api/v1/attributes`) shape that - the data
-entry form uses them for its dropdowns and the API enforces them when staging:
+A `reference` attribute stores the **business key** of a record of another
+entity (always - that doesn't change). Two optional settings (on
+`POST`/`PUT /api/v1/attributes`) shape how it is picked; the data entry form
+uses them for its dropdowns and the API enforces the cascade when staging:
 
 | Field | Meaning |
 |---|---|
-| `reference_value_attribute` | Which attribute (code) of the referenced entity is **stored** as the value. Default `null` = its business key. Must identify a record uniquely: it needs `is_unique`, or be the referenced entity's only business key (`400` otherwise). Existing records keep the value they have - change it on an empty attribute, or re-stage. |
-| `reference_display_attribute` | Which attribute (code) of the referenced entity is **shown** in the dropdown (UI only; the stored value is unchanged). Default `null` = the stored value. |
+| `reference_display_attribute` | Which attribute (code) of the referenced entity is **shown** in the dropdown instead of the business key (UI only; the stored value is still the business key). Default `null` = the business key. |
 | `cascade_parent_attribute` + `cascade_filter_attribute` | **Cascading dropdown** (set both or neither). `cascade_parent_attribute` is another attribute of *this* entity; `cascade_filter_attribute` is the attribute of the *referenced* entity that must equal the parent's current value. Example: `Untergruppe` (reference -> Untergruppen entity) with parent `Hauptgruppe` (the other reference on this entity) and filter `epd_level_1` (the Untergruppen entity's own reference to Hauptgruppe) - choosing a Hauptgruppe then offers only its Untergruppen, and changing the Hauptgruppe empties the Untergruppe. |
 
 `GET /api/v1/entities` (embedded `attributes`, now also with `id` and
@@ -149,21 +149,18 @@ chosen value and query the referenced entity with
 values, see "Response shaping").
 
 Configuration is validated (`400`): unknown attributes, the parent being the
-attribute itself or forming a loop, parent and filter that can never match (two
-references must point at the same entity and store the same field of it), a
-value attribute that isn't unique, or any of these on a non-reference
-attribute. Deleting an attribute that another reference stores as its value is
-refused; display and cascade settings that pointed at a deleted attribute are
-cleared.
+attribute itself or forming a loop, a parent and filter that can never match
+(two references must point at the same entity), or any of these on a
+non-reference attribute. Display and cascade settings that pointed at a deleted
+attribute are cleared.
 
-**Staged values are validated against all of it** (on `POST`/`PUT` of
-`/api/v1/stage/records`, same as the UI): the value must match an existing
-record of the referenced entity (by business key, or by
-`reference_value_attribute`), and when a cascade parent is set the record must
-also belong to the parent's value (`400`: `'U2' does not belong to the selected
-Hauptgruppe 'H1'`). A cascade child with an empty parent is only checked for
-existence. (Before this, the v1 stage endpoints did not check references at
-all - only the UI did.)
+**Staged values are validated** (on `POST`/`PUT` of `/api/v1/stage/records`,
+same as the UI): the value must match the business key of an existing record
+of the referenced entity, and when a cascade parent is set the record must
+also belong to the parent's value (`400`: `'U2' does not belong to the
+selected Hauptgruppe 'H1'`). A cascade child with an empty parent is only
+checked for existence. (Before this, the v1 stage endpoints did not check
+references at all - only the UI did.)
 
 ### Staging (full CRUD)
 
@@ -176,11 +173,10 @@ all - only the UI did.)
 | DELETE | `/api/v1/stage/records/{id}` | Never-committed records are hard-deleted outright; already-committed records are soft-deleted (flagged `operation=DELETE`, applied on the next commit/deploy). |
 
 POST/PUT body `data` fields are validated per attribute: a `reference`-typed
-attribute's value must exactly match an existing record of the referenced
-entity's staged records - by business key, or by the attribute's
-`reference_value_attribute` - and, for a cascading attribute, belong to the
-selected parent value (see "Reference attributes"), or the request is rejected
-with `400`.
+attribute's value must exactly match the business key of an existing record
+of the referenced entity's staged records and, for a cascading attribute,
+belong to the selected parent value (see "Reference attributes"), or the
+request is rejected with `400`.
 
 POST body fields:
 - `entity_id` (required, number) - which entity this record belongs to

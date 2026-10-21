@@ -31,7 +31,6 @@ interface AttributeRow {
   is_business_key: boolean
   sort_order: number
   reference_entity_id: number | null
-  reference_value_attribute: string | null
   reference_display_attribute: string | null
   cascade_parent_attribute: string | null
   cascade_filter_attribute: string | null
@@ -84,7 +83,7 @@ export async function GET(request: NextRequest) {
 
     const attributes = await dbQuery<AttributeRow>(
       `SELECT entity_id, id, code, name, data_type, max_length, is_required, is_business_key, sort_order,
-              reference_entity_id, reference_value_attribute, reference_display_attribute,
+              reference_entity_id, reference_display_attribute,
               cascade_parent_attribute, cascade_filter_attribute
        FROM mds_meta.attribute
        WHERE entity_id IN (${placeholders})
