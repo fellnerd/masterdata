@@ -2,6 +2,39 @@
 // JSON by src/app/api/v1/openapi.json/route.ts and rendered by the Scalar
 // UI at /api-docs. Keep this in sync whenever a v1 route's contract
 // changes - this is the only source of truth for what /api-docs shows.
+// Settings of a `reference` attribute beyond the referenced entity - shared by the
+// attribute schema and its create/update request bodies.
+const referenceSettingProps = {
+  reference_value_attribute: {
+    type: 'string',
+    nullable: true,
+    description:
+      'Attribute (code) of the referenced entity whose value is STORED. Default (null): the referenced record\'s business key. ' +
+      'Must identify a record uniquely: the attribute needs `is_unique`, or be the referenced entity\'s only business key. ' +
+      'Staged values are validated against it. Existing records keep the value they have.',
+  },
+  reference_display_attribute: {
+    type: 'string',
+    nullable: true,
+    description:
+      'Attribute (code) of the referenced entity shown in dropdowns (UI only - the stored value stays `reference_value_attribute`/the business key). Default (null): the stored value.',
+  },
+  cascade_parent_attribute: {
+    type: 'string',
+    nullable: true,
+    description:
+      'Cascading dropdown: code of ANOTHER attribute of this entity whose current value narrows the choices of this one. Set together with `cascade_filter_attribute`. ' +
+      'Example: on "Untergruppe", parent = "Hauptgruppe". Staged records are validated too - a value that does not belong to the selected parent is rejected with 400.',
+  },
+  cascade_filter_attribute: {
+    type: 'string',
+    nullable: true,
+    description:
+      'Cascading dropdown: code of the attribute of the REFERENCED entity that must equal the parent\'s value (e.g. the Untergruppen entity\'s own "Hauptgruppe" reference). ' +
+      'If both it and the parent are references they must point at the same entity and store the same field.',
+  },
+} as const
+
 export const openApiSpec = {
   openapi: '3.0.3',
   info: {
@@ -92,8 +125,9 @@ export const openApiSpec = {
           default_value: { type: 'string', nullable: true },
           reference_entity_id: { type: 'integer', nullable: true },
           reference_entity_code: { type: 'string', nullable: true },
+          ...referenceSettingProps,
           validation_regex: { type: 'string', nullable: true },
-          sort_order: { type: 'integer' },
+          sort_order: { type: 'integer', description: 'Position in forms (ascending). Set with PUT /attributes/reorder; a new attribute is appended after the last one.' },
         },
       },
       StagedRecord: {
@@ -426,7 +460,8 @@ export const openApiSpec = {
                   is_business_key: { type: 'boolean' },
                   is_unique: { type: 'boolean' },
                   reference_entity_id: { type: 'integer', description: 'Required when data_type is "reference"' },
-                  sort_order: { type: 'integer' },
+                  ...referenceSettingProps,
+                  sort_order: { type: 'integer', description: 'Omitted = appended after the entity\'s last attribute' },
                 },
               },
             },
@@ -434,9 +469,44 @@ export const openApiSpec = {
         },
         responses: {
           201: { description: 'Created', content: { 'application/json': { schema: { $ref: '#/components/schemas/Attribute' } } } },
+          400: { description: 'Invalid reference/cascade settings (unknown attribute, parent = itself or a loop, parent and filter that can never match, value attribute that is not unique, settings on a non-reference attribute)', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           403: { description: 'Missing scope or not admin', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           404: { description: 'Entity not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           409: { description: 'Code already exists on this entity', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+        },
+      },
+    },
+    '/attributes/reorder': {
+      put: {
+        summary: "Set the order of an entity's attributes",
+        description:
+          'Requires an admin token (checked live). `order` must list **every** attribute id of the entity exactly once, in the desired order; ' +
+          'positions become 10, 20, 30, ... The order drives form field order (and the column order of the next generated models/views). ' +
+          'The relative order of the **business-key** attributes cannot change while the entity has staged records (409): composite business keys are built in that order. ' +
+          'Moving other attributes - also across the key attributes - is always allowed. Does not mark the entity for schema deployment.',
+        tags: ['Attributes'],
+        security: [{ bearerAuth: ['attributes:write'] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['entity_id', 'order'],
+                properties: {
+                  entity_id: { type: 'integer' },
+                  order: { type: 'array', items: { type: 'integer' }, description: 'All attribute ids of the entity, first to last' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'New order', content: { 'application/json': { schema: { type: 'object', properties: { entity_id: { type: 'integer' }, attributes: { type: 'array', items: { type: 'object', properties: { id: { type: 'integer' }, code: { type: 'string' }, sort_order: { type: 'integer' } } } } } } } } },
+          400: { description: 'order is not exactly the entity\'s attribute ids', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          403: { description: 'Missing scope or not admin', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          404: { description: 'Entity not found or has no attributes', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          409: { description: 'Would change the relative order of business-key attributes of an entity that has records', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },
     },
@@ -468,6 +538,7 @@ export const openApiSpec = {
                   is_business_key: { type: 'boolean' },
                   is_unique: { type: 'boolean' },
                   reference_entity_id: { type: 'integer' },
+                  ...referenceSettingProps,
                   sort_order: { type: 'integer' },
                 },
               },
@@ -476,14 +547,14 @@ export const openApiSpec = {
         },
         responses: {
           200: { description: 'OK', content: { 'application/json': { schema: { $ref: '#/components/schemas/Attribute' } } } },
-          400: { description: 'No fields to update, or an attempt to change the immutable `code`', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          400: { description: 'No fields to update, an attempt to change the immutable `code`, or invalid reference/cascade settings', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           403: { description: 'Missing scope or not admin', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           404: { description: 'Not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },
       delete: {
         summary: 'Delete an attribute',
-        description: 'Requires an admin token (checked live). No dependency checks - deleting an attribute referenced elsewhere may orphan data. The entity\'s currently-deployed views are regenerated immediately so they stop selecting the removed column (`views_redeployed`); a view that could not be regenerated is reported in `warnings`.',
+        description: 'Requires an admin token (checked live). Refused (400) while another reference attribute stores this attribute as its value (`reference_value_attribute`); display/cascade settings that pointed at it are cleared. Staged data is not checked - values already stored for the attribute are orphaned. The entity\'s currently-deployed views are regenerated immediately so they stop selecting the removed column (`views_redeployed`); a view that could not be regenerated is reported in `warnings`.',
         tags: ['Attributes'],
         security: [{ bearerAuth: ['attributes:write'] }],
         responses: {

@@ -123,10 +123,47 @@ return a clean `400` rather than a database error.
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/v1/attributes?entity_id=` | `entity_id` is **required**. Lists that entity's attributes standalone (same data also embedded in `GET /api/v1/entities`). |
-| POST | `/api/v1/attributes` | Body: `{ entity_id, code, name, data_type?, is_required?, is_business_key?, is_unique?, reference_entity_id?, sort_order? }`. `data_type` one of `string`, `integer`, `decimal`, `boolean`, `date`, `datetime`, `reference`; `reference_entity_id` required when `data_type` is `reference`. Admin token required. |
+| POST | `/api/v1/attributes` | Body: `{ entity_id, code, name, data_type?, is_required?, is_business_key?, is_unique?, reference_entity_id?, reference_value_attribute?, reference_display_attribute?, cascade_parent_attribute?, cascade_filter_attribute?, sort_order? }`. `data_type` one of `string`, `integer`, `decimal`, `boolean`, `date`, `datetime`, `reference`; `reference_entity_id` required when `data_type` is `reference`; the four `reference_*`/`cascade_*` settings only apply to references (see "Reference attributes" below). Without `sort_order` the attribute is appended after the entity's last one. Admin token required. |
+| PUT | `/api/v1/attributes/reorder` | Body: `{ entity_id, order: [attributeId, ...] }` - every attribute id of the entity exactly once, in the desired order (positions become 10, 20, 30, ...). This is the field order of the data-entry form. Admin token required. `400` if `order` isn't exactly the entity's attribute ids; `409` if it would change the relative order of the **business-key** attributes of an entity that already has records (composite business keys are built in that order, so new keys would stop matching stored ones) - moving any other attribute, also across the key attributes, is always fine. |
 | GET | `/api/v1/attributes/{id}` | Single attribute by numeric id |
 | PUT | `/api/v1/attributes/{id}` | Partial update, same fields as POST. Admin token required. Returns the full updated attribute. **`code` is immutable**: a different `code` returns `400` (it used to be silently ignored) - to "rename", create a new attribute and delete the old one (values are not carried over). Sending the unchanged `code` is accepted. Changing `data_type`/`precision`/`scale` regenerates the entity's deployed views. |
 | DELETE | `/api/v1/attributes/{id}` | Admin token required. No dependency checks - deleting an attribute referenced elsewhere (e.g. by staged data) can orphan data, unlike Entity delete. The entity's currently-deployed views are regenerated right away so they stop selecting the dropped column (response: `views_redeployed`, plus `warnings` if one couldn't be regenerated) - previously the view returned `500 Invalid column name` until someone redeployed. |
+
+#### Reference attributes: stored value, dropdown label, cascading dropdowns
+
+A `reference` attribute stores a pointer to a record of another entity. Three
+optional settings (on `POST`/`PUT /api/v1/attributes`) shape that - the data
+entry form uses them for its dropdowns and the API enforces them when staging:
+
+| Field | Meaning |
+|---|---|
+| `reference_value_attribute` | Which attribute (code) of the referenced entity is **stored** as the value. Default `null` = its business key. Must identify a record uniquely: it needs `is_unique`, or be the referenced entity's only business key (`400` otherwise). Existing records keep the value they have - change it on an empty attribute, or re-stage. |
+| `reference_display_attribute` | Which attribute (code) of the referenced entity is **shown** in the dropdown (UI only; the stored value is unchanged). Default `null` = the stored value. |
+| `cascade_parent_attribute` + `cascade_filter_attribute` | **Cascading dropdown** (set both or neither). `cascade_parent_attribute` is another attribute of *this* entity; `cascade_filter_attribute` is the attribute of the *referenced* entity that must equal the parent's current value. Example: `Untergruppe` (reference -> Untergruppen entity) with parent `Hauptgruppe` (the other reference on this entity) and filter `epd_level_1` (the Untergruppen entity's own reference to Hauptgruppe) - choosing a Hauptgruppe then offers only its Untergruppen, and changing the Hauptgruppe empties the Untergruppe. |
+
+`GET /api/v1/entities` (embedded `attributes`, now also with `id` and
+`sort_order`) and `GET /api/v1/attributes` return these fields, so a client can
+build the same dependent dropdowns itself: for the child, read the parent's
+chosen value and query the referenced entity with
+`attr.<cascade_filter_attribute>.exact=<parent value>` (or `?distinct=` for its
+values, see "Response shaping").
+
+Configuration is validated (`400`): unknown attributes, the parent being the
+attribute itself or forming a loop, parent and filter that can never match (two
+references must point at the same entity and store the same field of it), a
+value attribute that isn't unique, or any of these on a non-reference
+attribute. Deleting an attribute that another reference stores as its value is
+refused; display and cascade settings that pointed at a deleted attribute are
+cleared.
+
+**Staged values are validated against all of it** (on `POST`/`PUT` of
+`/api/v1/stage/records`, same as the UI): the value must match an existing
+record of the referenced entity (by business key, or by
+`reference_value_attribute`), and when a cascade parent is set the record must
+also belong to the parent's value (`400`: `'U2' does not belong to the selected
+Hauptgruppe 'H1'`). A cascade child with an empty parent is only checked for
+existence. (Before this, the v1 stage endpoints did not check references at
+all - only the UI did.)
 
 ### Staging (full CRUD)
 
@@ -139,8 +176,11 @@ return a clean `400` rather than a database error.
 | DELETE | `/api/v1/stage/records/{id}` | Never-committed records are hard-deleted outright; already-committed records are soft-deleted (flagged `operation=DELETE`, applied on the next commit/deploy). |
 
 POST/PUT body `data` fields are validated per attribute: a `reference`-typed
-attribute's value must exactly match an existing `business_key` in the
-referenced entity's staged records, or the request is rejected with `400`.
+attribute's value must exactly match an existing record of the referenced
+entity's staged records - by business key, or by the attribute's
+`reference_value_attribute` - and, for a cascading attribute, belong to the
+selected parent value (see "Reference attributes"), or the request is rejected
+with `400`.
 
 POST body fields:
 - `entity_id` (required, number) - which entity this record belongs to
@@ -155,7 +195,10 @@ POST body fields:
   every attribute code the key needs. Editing a record's `data` afterward
   (`PUT`) re-derives and updates `business_key` the same way if any of those
   values changed.
-- `data` (required, object) - the record's field values, keyed by attribute code
+- `data` (required, object) - the record's field values, keyed by attribute code.
+  Send `integer`/`decimal` values as JSON numbers (`1.5`, decimal point) - the API
+  stores what it gets, so a string like `"1,5"` would be stored as text. (The
+  data-entry form accepts a decimal comma and converts it to the number.)
 
 #### Attribute-value filters (`attr.*`) - shared by all three GET read endpoints
 
@@ -362,10 +405,10 @@ field) with a matching HTTP status:
 
 | Status | Meaning |
 |---|---|
-| 400 | Bad request (missing required field, invalid reference value, unknown attribute code in a filter, `attr.*` filter used without `entity_id` on `/stage/records`, invalid entity code format, invalid/negative `page`/`pageSize`, an unknown/empty `fields`/`distinct` value, `fields` together with `distinct`, `fields`/`distinct` without `entity_id` on `/stage/records`, or a query parameter name the endpoint doesn't recognize at all) |
+| 400 | Bad request (missing required field, invalid reference value, unknown attribute code in a filter, `attr.*` filter used without `entity_id` on `/stage/records`, invalid entity code format, invalid/negative `page`/`pageSize`, an unknown/empty `fields`/`distinct` value, an invalid reference/cascade configuration or a reference value that doesn't exist / doesn't belong to its cascade parent, `fields` together with `distinct`, `fields`/`distinct` without `entity_id` on `/stage/records`, or a query parameter name the endpoint doesn't recognize at all) |
 | 401 | Missing/empty/invalid/expired/revoked token |
 | 403 | Token valid but missing the required scope, or (Models/Entities/Attributes writes) the token owner isn't currently admin |
 | 404 | Record/entity/model/attribute/view not found, or entity not yet deployed to master |
 | 405 | Write attempted on a read-only endpoint (master, views) |
-| 409 | Duplicate code (Model/Entity/Attribute create), an entity code that's ambiguous across models (add `?model_code=`), or a staged record whose business key is already used by another staged record of the entity |
+| 409 | Duplicate code (Model/Entity/Attribute create), an entity code that's ambiguous across models (add `?model_code=`), a staged record whose business key is already used by another staged record of the entity, or an attribute reorder that would change the relative order of the business-key attributes of an entity with records |
 | 500 | Server error - check `details` in the response body |
