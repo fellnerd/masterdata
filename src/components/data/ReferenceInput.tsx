@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button, MenuItem, Tag } from '@blueprintjs/core'
 import { Suggest } from '@blueprintjs/select'
 
@@ -17,26 +17,49 @@ interface ReferenceInputProps {
   value: string
   onChange: (value: string) => void
   intent?: 'primary' | 'none'
+  /** Attribute of the referenced entity that is stored as the value; omitted = its business key. */
+  valueAttribute?: string | null
+  /** Attribute of the referenced entity shown in the list; omitted = the value itself. */
+  displayAttribute?: string | null
+  /**
+   * Cascade: only offer records whose `attribute` equals `value`. Pass undefined while the
+   * parent is still empty (everything is offered then). The parent re-mounts this component
+   * (via `key`) when that value changes - see data/page.tsx.
+   */
+  cascadeFilter?: { attribute: string; value: string }
 }
+
+const text = (v: unknown) => (v === undefined || v === null ? '' : String(v))
 
 // Reference-type attribute editor: fuzzy-searches the referenced entity's
 // staged records and only accepts values picked from that list (the value
 // only ever changes via onItemSelect, never from raw typing - typing just
 // filters the dropdown). Capped at 500 candidates, fetched once per
 // referenced entity - fine for this app's data volumes, but a large target
-// entity would need server-side search instead of fetch-all.
-export function ReferenceInput({ id, referencedEntityId, referencedEntityName, value, onChange, intent }: ReferenceInputProps) {
+// entity would need server-side search instead of fetch-all. With a cascade
+// filter the server already narrows the list to the selected parent.
+export function ReferenceInput({
+  id, referencedEntityId, referencedEntityName, value, onChange, intent,
+  valueAttribute, displayAttribute, cascadeFilter,
+}: ReferenceInputProps) {
   const [candidates, setCandidates] = useState<ReferenceRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
 
+  const filterAttribute = cascadeFilter?.attribute
+  const filterValue = cascadeFilter?.value
+
   useEffect(() => {
-    // referencedEntityId is fixed for the lifetime of a given attribute field
-    // (a new attribute means a new component instance, not a prop change on
-    // this one), so the initial useState(true)/useState(false) above already
-    // cover the "reset" case - no synchronous setState needed at effect start.
+    // referencedEntityId and the cascade filter are fixed for the lifetime of
+    // a given component instance (a different attribute or a different parent
+    // value means a new instance - the parent sets `key`), so the initial
+    // useState(true)/useState(false) above already cover the "reset" case - no
+    // synchronous setState needed at effect start.
     let cancelled = false
-    fetch(`/api/records?entity_id=${referencedEntityId}&pageSize=500`)
+    const filter = filterAttribute && filterValue
+      ? `&attr.${encodeURIComponent(filterAttribute)}.exact=${encodeURIComponent(filterValue)}`
+      : ''
+    fetch(`/api/records?entity_id=${referencedEntityId}&pageSize=500${filter}`)
       .then(res => {
         if (!res.ok) throw new Error('Failed to load reference candidates')
         return res.json()
@@ -53,27 +76,43 @@ export function ReferenceInput({ id, referencedEntityId, referencedEntityName, v
       .catch(() => { if (!cancelled) setLoadError(true) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [referencedEntityId])
+  }, [referencedEntityId, filterAttribute, filterValue])
 
-  const matched = value ? candidates.find(c => c.business_key === value) : undefined
+  const valueOf = (c: ReferenceRecord) => (valueAttribute ? text(c.data[valueAttribute]) : c.business_key)
+  const labelOf = (c: ReferenceRecord) => {
+    const label = displayAttribute ? text(c.data[displayAttribute]) : ''
+    return label || valueOf(c)
+  }
+
+  // Records that don't carry the configured value attribute can't be selected
+  // (there'd be nothing to store); sorted by what the user reads.
+  const items = useMemo(
+    () => candidates
+      .filter(c => valueOf(c) !== '')
+      .sort((a, b) => labelOf(a).localeCompare(labelOf(b), undefined, { numeric: true, sensitivity: 'base' })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [candidates, valueAttribute, displayAttribute]
+  )
+
+  const matched = value ? items.find(c => valueOf(c) === value) : undefined
   // selectedItem only controls what text is shown in the input - it doesn't
-  // need to be part of `candidates`. A synthetic item lets an existing value
-  // that no longer matches anything (stale/legacy reference) still display
-  // as text instead of silently going blank.
+  // need to be part of `items`. A synthetic item lets an existing value
+  // that no longer matches anything (stale/legacy reference, or a parent that
+  // changed underneath it) still display as text instead of silently going blank.
   const selectedItem: ReferenceRecord | null = value
-    ? (matched ?? { id: -1, business_key: value, data: {} })
+    ? (matched ?? { id: -1, business_key: value, data: valueAttribute ? { [valueAttribute]: value } : {} })
     : null
   const isUnmatched = !!value && !matched && !loading
 
   return (
     <>
       <Suggest<ReferenceRecord>
-        items={candidates}
+        items={items}
         fill
         disabled={loading}
         resetOnClose
         selectedItem={selectedItem}
-        itemsEqual="business_key"
+        itemsEqual={(a, b) => valueOf(a) === valueOf(b)}
         inputProps={{
           id,
           intent: isUnmatched ? 'warning' : intent,
@@ -82,13 +121,20 @@ export function ReferenceInput({ id, referencedEntityId, referencedEntityName, v
             <Button icon="cross" minimal small onClick={() => onChange('')} title="Referenz entfernen" />
           ) : undefined
         }}
-        itemPredicate={(query, item) => item.business_key.toLowerCase().includes(query.toLowerCase())}
+        itemPredicate={(query, item) => {
+          const q = query.toLowerCase()
+          return labelOf(item).toLowerCase().includes(q) || valueOf(item).toLowerCase().includes(q)
+        }}
         itemRenderer={(item, { handleClick, handleFocus, modifiers }) => {
           if (!modifiers.matchesPredicate) return null
+          const label = labelOf(item)
+          const val = valueOf(item)
           return (
             <MenuItem
               key={item.id}
-              text={item.business_key}
+              text={label}
+              // the stored value, when the list shows something else
+              label={label !== val ? val : undefined}
               roleStructure="listoption"
               active={modifiers.active}
               onClick={handleClick}
@@ -96,18 +142,25 @@ export function ReferenceInput({ id, referencedEntityId, referencedEntityName, v
             />
           )
         }}
-        onItemSelect={(item) => onChange(item.business_key)}
-        inputValueRenderer={(item) => item.business_key}
+        onItemSelect={(item) => onChange(valueOf(item))}
+        inputValueRenderer={(item) => labelOf(item)}
         noResults={
           <MenuItem
             disabled
-            text={loadError ? 'Fehler beim Laden' : candidates.length === 0 ? 'Keine Datensätze vorhanden' : 'Keine Treffer'}
+            text={
+              loadError ? 'Fehler beim Laden'
+                : items.length === 0
+                  ? (cascadeFilter ? 'Keine Einträge zur gewählten Auswahl' : 'Keine Datensätze vorhanden')
+                  : 'Keine Treffer'
+            }
           />
         }
       />
       {isUnmatched && (
         <Tag intent="warning" minimal style={{ marginTop: 6 }}>
-          &quot;{value}&quot; wurde in {referencedEntityName || 'der referenzierten Entity'} nicht gefunden
+          {cascadeFilter
+            ? <>&quot;{value}&quot; passt nicht zur gewählten Auswahl in {referencedEntityName || 'der referenzierten Entity'}</>
+            : <>&quot;{value}&quot; wurde in {referencedEntityName || 'der referenzierten Entity'} nicht gefunden</>}
         </Tag>
       )}
     </>

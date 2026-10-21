@@ -194,7 +194,7 @@ def get_attributes(conn, entity_id):
             a.sort_order
         FROM mds_meta.attribute a
         WHERE a.entity_id = ?
-        ORDER BY a.sort_order
+        ORDER BY a.sort_order, a.id
     """, entity_id)
     
     columns = [desc[0] for desc in cursor.description]

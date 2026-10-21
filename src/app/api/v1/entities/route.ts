@@ -22,12 +22,19 @@ interface EntityRow {
 
 interface AttributeRow {
   entity_id: number
+  id: number
   code: string
   name: string
   data_type: string
   max_length: number | null
   is_required: boolean
   is_business_key: boolean
+  sort_order: number
+  reference_entity_id: number | null
+  reference_value_attribute: string | null
+  reference_display_attribute: string | null
+  cascade_parent_attribute: string | null
+  cascade_filter_attribute: string | null
 }
 
 // GET /api/v1/entities - List entities with their attributes (scope: entities:read)
@@ -76,10 +83,12 @@ export async function GET(request: NextRequest) {
     entityIds.forEach((id, i) => { idParams[`id${i}`] = id })
 
     const attributes = await dbQuery<AttributeRow>(
-      `SELECT entity_id, code, name, data_type, max_length, is_required, is_business_key
+      `SELECT entity_id, id, code, name, data_type, max_length, is_required, is_business_key, sort_order,
+              reference_entity_id, reference_value_attribute, reference_display_attribute,
+              cascade_parent_attribute, cascade_filter_attribute
        FROM mds_meta.attribute
        WHERE entity_id IN (${placeholders})
-       ORDER BY entity_id, sort_order`,
+       ORDER BY entity_id, sort_order, id`,
       idParams
     )
 

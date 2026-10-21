@@ -70,7 +70,7 @@ ${view.custom_sql}`
 
   const attributes = await dbQuery<Attribute>(
     `SELECT code, name, data_type, [precision], scale FROM mds_meta.attribute
-     WHERE entity_id = @entityId ORDER BY sort_order`,
+     WHERE entity_id = @entityId ORDER BY sort_order, id`,
     { entityId: entity.id }
   )
   const attrByCode = new Map(attributes.map(a => [a.code, a]))

@@ -56,7 +56,7 @@
   FROM mds_meta.entity e
   LEFT JOIN mds_meta.attribute a ON a.entity_id = e.id
   WHERE e.id = {{ entity_id }}
-  ORDER BY a.sort_order
+  ORDER BY a.sort_order, a.id
 {% endset %}
 
 {% set entity_result = run_query(entity_query) %}

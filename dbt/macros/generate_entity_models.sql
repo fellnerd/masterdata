@@ -47,7 +47,7 @@
                 a.sort_order
             FROM mds_meta.attribute a
             WHERE a.entity_id = {{ entity['id'] }}
-            ORDER BY a.sort_order
+            ORDER BY a.sort_order, a.id
         {% endset %}
         
         {% set attributes = run_query(attrs_query) %}
@@ -85,7 +85,7 @@
     SELECT code, data_type, is_business_key
     FROM mds_meta.attribute
     WHERE entity_id = {{ entity_id }}
-    ORDER BY sort_order
+    ORDER BY sort_order, id
 {% endset %}
 {{ return(run_query(query)) }}
 {% endmacro %}

@@ -11,7 +11,6 @@ import {
   InputGroup,
   HTMLSelect,
   Checkbox,
-  NumericInput,
   Tabs,
   Tab,
   Spinner,
@@ -27,6 +26,7 @@ import { PageLayout } from '@/components/layout/PageLayout'
 import { KpiCard, KpiGrid } from '@/components/ui/KpiCard'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import { ReferenceInput } from '@/components/data/ReferenceInput'
+import { NumberInput } from '@/components/data/NumberInput'
 import { useAttributeFilterPersistence } from '@/hooks/useAttributeFilterPersistence'
 
 const STORAGE_KEY = 'mds_filter_data_entity_id'
@@ -51,6 +51,10 @@ interface Attribute {
   is_business_key: boolean
   reference_entity_id: number | null
   reference_entity_code?: string | null
+  reference_value_attribute?: string | null
+  reference_display_attribute?: string | null
+  cascade_parent_attribute?: string | null
+  cascade_filter_attribute?: string | null
 }
 
 interface StagedRecord {
@@ -259,14 +263,41 @@ function DataEntryPageInner() {
     values: Record<string, DataValue>,
     setValues: (next: Record<string, DataValue>) => void
   ) => {
+    // Changing a field that other fields cascade from (Hauptgruppe ->
+    // Untergruppe) empties the dependents - their old value belonged to the
+    // previous parent - and, transitively, theirs.
+    const commit = (value: DataValue) => {
+      const next: Record<string, DataValue> = { ...values, [attr.code]: value }
+      const clearChildren = (parentCode: string) => {
+        for (const child of attributes) {
+          if (child.cascade_parent_attribute === parentCode && next[child.code] !== undefined && next[child.code] !== '') {
+            next[child.code] = ''
+            clearChildren(child.code)
+          }
+        }
+      }
+      if ((values[attr.code] ?? '') !== value) clearChildren(attr.code)
+      setValues(next)
+    }
+
     if (attr.data_type === 'reference' && attr.reference_entity_id) {
+      const parentCode = attr.cascade_parent_attribute
+      const parentValue = parentCode ? String(values[parentCode] ?? '') : ''
+      const cascadeFilter = parentCode && attr.cascade_filter_attribute && parentValue
+        ? { attribute: attr.cascade_filter_attribute, value: parentValue }
+        : undefined
       return (
         <ReferenceInput
+          // a different parent value = a different candidate list: start over
+          key={`${attr.id}:${parentValue}`}
           id={fieldId}
           referencedEntityId={attr.reference_entity_id}
           referencedEntityName={attr.reference_entity_code || undefined}
+          valueAttribute={attr.reference_value_attribute}
+          displayAttribute={attr.reference_display_attribute}
+          cascadeFilter={cascadeFilter}
           value={String(values[attr.code] ?? '')}
-          onChange={(v) => setValues({ ...values, [attr.code]: v })}
+          onChange={(v) => commit(v)}
           intent={attr.is_business_key ? 'primary' : 'none'}
         />
       )
@@ -280,7 +311,7 @@ function DataEntryPageInner() {
           id={fieldId}
           checked={checked}
           label={attr.name}
-          onChange={(e) => setValues({ ...values, [attr.code]: (e.target as HTMLInputElement).checked })}
+          onChange={(e) => commit((e.target as HTMLInputElement).checked)}
         />
       )
     }
@@ -300,7 +331,7 @@ function DataEntryPageInner() {
           timePrecision={isDatetime ? 'minute' : undefined}
           canClearSelection
           showActionsBar
-          onChange={(newDate) => setValues({ ...values, [attr.code]: newDate ?? '' })}
+          onChange={(newDate) => commit(newDate ?? '')}
         />
       )
     }
@@ -308,18 +339,13 @@ function DataEntryPageInner() {
     if (attr.data_type === 'integer' || attr.data_type === 'decimal') {
       const raw = values[attr.code]
       return (
-        <NumericInput
+        <NumberInput
           id={fieldId}
-          fill
+          integer={attr.data_type === 'integer'}
           placeholder={`Enter ${attr.name.toLowerCase()}`}
-          value={raw === '' || raw === undefined || raw === null ? '' : Number(raw)}
-          stepSize={attr.data_type === 'integer' ? 1 : 0.01}
-          minorStepSize={attr.data_type === 'integer' ? null : 0.01}
+          value={raw as number | string | null | undefined}
           intent={attr.is_business_key ? 'primary' : 'none'}
-          onValueChange={(valueAsNumber, valueAsString) => setValues({
-            ...values,
-            [attr.code]: valueAsString === '' || Number.isNaN(valueAsNumber) ? '' : valueAsNumber
-          })}
+          onChange={(n) => commit(n)}
         />
       )
     }
@@ -330,7 +356,7 @@ function DataEntryPageInner() {
         type="text"
         placeholder={`Enter ${attr.name.toLowerCase()}`}
         value={String(values[attr.code] ?? '')}
-        onChange={(e) => setValues({ ...values, [attr.code]: e.target.value })}
+        onChange={(e) => commit(e.target.value)}
         intent={attr.is_business_key ? 'primary' : 'none'}
       />
     )
@@ -741,6 +767,8 @@ function DataEntryPageInner() {
                       id={`filter-${attr.code}`}
                       referencedEntityId={attr.reference_entity_id}
                       referencedEntityName={attr.reference_entity_code || undefined}
+                      valueAttribute={attr.reference_value_attribute}
+                      displayAttribute={attr.reference_display_attribute}
                       value={attributeFilters[key] ?? ''}
                       onChange={(v) => update({ [key]: v })}
                     />
@@ -772,20 +800,18 @@ function DataEntryPageInner() {
                 return (
                   <FormGroup key={attr.id} label={attr.name}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <NumericInput
+                      <NumberInput
                         placeholder="Min"
-                        buttonPosition="none"
-                        fill
+                        integer={attr.data_type === 'integer'}
                         value={attributeFilters[minKey] ?? ''}
-                        onValueChange={(_n, str) => update({ [minKey]: str })}
+                        onChange={(n) => update({ [minKey]: n === '' ? '' : String(n) })}
                       />
                       <span className="text-muted" style={{ fontSize: 11 }}>–</span>
-                      <NumericInput
+                      <NumberInput
                         placeholder="Max"
-                        buttonPosition="none"
-                        fill
+                        integer={attr.data_type === 'integer'}
                         value={attributeFilters[maxKey] ?? ''}
-                        onValueChange={(_n, str) => update({ [maxKey]: str })}
+                        onChange={(n) => update({ [maxKey]: n === '' ? '' : String(n) })}
                       />
                     </div>
                   </FormGroup>

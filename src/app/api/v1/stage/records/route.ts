@@ -9,6 +9,7 @@ import {
   parseShaping, SHAPING_PARAMS, MAX_DISTINCT_PAGE_SIZE, loadEntityAttributes, resolveNames,
   queryDistinct, formatDistinctValue, pickFields,
 } from '@/lib/responseShaping'
+import { validateReferenceAttributes } from '@/lib/validateReferences'
 import { getBusinessKeyAttributeCodes, deriveBusinessKey, findRecordByBusinessKey, duplicateBusinessKeyMessage } from '@/lib/businessKey'
 
 export const runtime = 'nodejs'
@@ -207,6 +208,11 @@ export async function POST(request: NextRequest) {
         { error: duplicateBusinessKeyMessage(business_key, existingRecord), existing_record_id: existingRecord.id },
         { status: 409 }
       )
+    }
+
+    const referenceError = await validateReferenceAttributes(entity_id, data)
+    if (referenceError) {
+      return NextResponse.json({ error: referenceError }, { status: 400 })
     }
 
     const dataJson = JSON.stringify(data)

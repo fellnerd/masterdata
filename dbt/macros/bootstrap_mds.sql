@@ -112,6 +112,30 @@ CREATE TABLE mds_meta.attribute (
     CONSTRAINT FK__attribute__reference_entity FOREIGN KEY (reference_entity_id) REFERENCES mds_meta.entity(id),
     CONSTRAINT UQ__attribute__entity_code UNIQUE (entity_id, code)
 );
+
+-- Reference attributes: which attribute of the referenced entity is STORED as
+-- the value (NULL = the referenced record's business key, the original
+-- behaviour) and which one is SHOWN in the dropdown (NULL = same as the value).
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('mds_meta.attribute') AND name = 'reference_value_attribute')
+BEGIN
+    ALTER TABLE mds_meta.attribute ADD reference_value_attribute NVARCHAR(100) NULL;
+END
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('mds_meta.attribute') AND name = 'reference_display_attribute')
+BEGIN
+    ALTER TABLE mds_meta.attribute ADD reference_display_attribute NVARCHAR(100) NULL;
+END
+
+-- Cascading dropdown: only offer referenced records whose
+-- cascade_filter_attribute (an attribute of the REFERENCED entity) equals the
+-- current value of cascade_parent_attribute (another attribute of THIS entity).
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('mds_meta.attribute') AND name = 'cascade_parent_attribute')
+BEGIN
+    ALTER TABLE mds_meta.attribute ADD cascade_parent_attribute NVARCHAR(100) NULL;
+END
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('mds_meta.attribute') AND name = 'cascade_filter_attribute')
+BEGIN
+    ALTER TABLE mds_meta.attribute ADD cascade_filter_attribute NVARCHAR(100) NULL;
+END
 {% endset %}
 
 {% set entity_view_sql %}

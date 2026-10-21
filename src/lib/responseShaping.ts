@@ -100,7 +100,7 @@ export interface AttributeMeta {
 // All attributes of an entity, keyed by lower-case code.
 export async function loadEntityAttributes(entityId: number): Promise<Map<string, AttributeMeta>> {
   const rows = await dbQuery<AttributeMeta>(
-    'SELECT code, data_type, [precision], scale FROM mds_meta.attribute WHERE entity_id = @entityId ORDER BY sort_order',
+    'SELECT code, data_type, [precision], scale FROM mds_meta.attribute WHERE entity_id = @entityId ORDER BY sort_order, id',
     { entityId }
   )
   return new Map(rows.map(r => [r.code.toLowerCase(), r]))

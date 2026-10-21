@@ -46,6 +46,10 @@ interface Attribute {
   default_value: string | null;
   reference_entity_id: number | null;
   reference_entity_code: string | null;
+  reference_value_attribute: string | null;
+  reference_display_attribute: string | null;
+  cascade_parent_attribute: string | null;
+  cascade_filter_attribute: string | null;
   validation_regex: string | null;
   sort_order: number;
   created_at: string;
@@ -64,6 +68,140 @@ interface Summary {
   businessKeys: number;
   references: number;
   entities: number;
+}
+
+interface ReferenceSettings {
+  value_attribute: string;     // '' = business key
+  display_attribute: string;   // '' = same as the stored value
+  cascade_parent: string;      // '' = no cascade
+  cascade_filter: string;
+}
+
+const NO_REFERENCE_SETTINGS: ReferenceSettings = {
+  value_attribute: '',
+  display_attribute: '',
+  cascade_parent: '',
+  cascade_filter: '',
+};
+
+// Settings of a reference attribute beyond "which entity": what is stored,
+// what the dropdown shows, and whether the list narrows to a parent selection
+// (Hauptgruppe -> Untergruppe). Shared by the Add and Edit dialogs.
+function ReferenceSettingsFields({
+  ownEntityId,
+  ownCode,
+  referencedEntityId,
+  attributes,
+  value,
+  onChange,
+}: {
+  ownEntityId: number;
+  ownCode: string;
+  referencedEntityId: number;
+  attributes: Attribute[];
+  value: ReferenceSettings;
+  onChange: (next: ReferenceSettings) => void;
+}) {
+  const refAttrs = attributes.filter((a) => a.entity_id === referencedEntityId);
+  const ownAttrs = attributes.filter((a) => a.entity_id === ownEntityId && a.code !== ownCode);
+  if (!referencedEntityId || refAttrs.length === 0) return null;
+
+  // Only attributes that identify a record uniquely can be the stored value
+  // (the server enforces the same rule).
+  const businessKeyCount = refAttrs.filter((a) => a.is_business_key).length;
+  const valueCandidates = refAttrs.filter((a) => a.is_unique || (a.is_business_key && businessKeyCount === 1));
+  const label = (a: Attribute) => `${a.name} (${a.code})`;
+
+  const pickParent = (code: string) => {
+    let filter = value.cascade_filter;
+    if (!code) {
+      filter = '';
+    } else if (!filter) {
+      // Natural default: the referenced entity's own link to the same entity
+      // the parent points at (Untergruppe.epd_level_1 -> Hauptgruppe).
+      const parent = ownAttrs.find((a) => a.code === code);
+      const match = parent?.reference_entity_id
+        ? refAttrs.filter((a) => a.data_type === 'reference' && a.reference_entity_id === parent.reference_entity_id)
+        : [];
+      if (match.length === 1) filter = match[0].code;
+    }
+    onChange({ ...value, cascade_parent: code, cascade_filter: filter });
+  };
+
+  return (
+    <div style={{ borderLeft: '3px solid var(--blue3)', paddingLeft: 12, marginBottom: 12 }}>
+      <FormGroup
+        label="Gespeicherter Wert"
+        labelFor="ref-value-attr"
+        helperText="Welches Feld der referenzierten Entity im Datensatz gespeichert wird. Bestehende Datensätze behalten ihren Wert."
+      >
+        <HTMLSelect
+          id="ref-value-attr"
+          fill
+          value={value.value_attribute}
+          onChange={(e) => onChange({ ...value, value_attribute: e.target.value })}
+        >
+          <option value="">Business Key (Standard)</option>
+          {valueCandidates.map((a) => (
+            <option key={a.code} value={a.code}>{label(a)}</option>
+          ))}
+        </HTMLSelect>
+      </FormGroup>
+      <FormGroup
+        label="Anzeige im Dropdown"
+        labelFor="ref-display-attr"
+        helperText="Welches Feld in der Auswahlliste angezeigt wird (gespeichert wird weiterhin der oben gewählte Wert)."
+      >
+        <HTMLSelect
+          id="ref-display-attr"
+          fill
+          value={value.display_attribute}
+          onChange={(e) => onChange({ ...value, display_attribute: e.target.value })}
+        >
+          <option value="">Wie gespeicherter Wert (Standard)</option>
+          {refAttrs.map((a) => (
+            <option key={a.code} value={a.code}>{label(a)}</option>
+          ))}
+        </HTMLSelect>
+      </FormGroup>
+      <FormGroup
+        label="Abhängig von (Kaskade)"
+        labelFor="ref-cascade-parent"
+        helperText="Zeigt nur Einträge, die zur Auswahl in diesem anderen Feld passen (z. B. nur die Untergruppen der gewählten Hauptgruppe)."
+      >
+        <HTMLSelect
+          id="ref-cascade-parent"
+          fill
+          value={value.cascade_parent}
+          onChange={(e) => pickParent(e.target.value)}
+        >
+          <option value="">Keine</option>
+          {ownAttrs.map((a) => (
+            <option key={a.code} value={a.code}>{label(a)}</option>
+          ))}
+        </HTMLSelect>
+      </FormGroup>
+      {value.cascade_parent && (
+        <FormGroup
+          label="Vergleichsfeld in der referenzierten Entity"
+          labelFor="ref-cascade-filter"
+          helperText="Dieses Feld muss dem gewählten Wert des übergeordneten Feldes entsprechen."
+        >
+          <HTMLSelect
+            id="ref-cascade-filter"
+            fill
+            value={value.cascade_filter}
+            onChange={(e) => onChange({ ...value, cascade_filter: e.target.value })}
+          >
+            <option value="">Feld wählen...</option>
+            {refAttrs.map((a) => (
+              <option key={a.code} value={a.code}>{label(a)}</option>
+            ))}
+          </HTMLSelect>
+        </FormGroup>
+      )}
+    </div>
+  );
 }
 
 export default function AttributesPage() {
@@ -101,6 +239,7 @@ function AttributesPageInner() {
     is_unique: boolean;
     is_business_key: boolean;
     max_length: string;
+    reference: ReferenceSettings;
   }>({
     name: '',
     description: '',
@@ -108,6 +247,7 @@ function AttributesPageInner() {
     is_unique: false,
     is_business_key: false,
     max_length: '',
+    reference: NO_REFERENCE_SETTINGS,
   });
   const [newAttribute, setNewAttribute] = useState<{
     code: string;
@@ -120,6 +260,7 @@ function AttributesPageInner() {
     is_business_key: boolean;
     description: string;
     reference_entity_id?: number;
+    reference: ReferenceSettings;
   }>({
     code: '',
     name: '',
@@ -130,7 +271,8 @@ function AttributesPageInner() {
     is_unique: false,
     is_business_key: false,
     description: '',
-    reference_entity_id: 0
+    reference_entity_id: 0,
+    reference: NO_REFERENCE_SETTINGS,
   });
 
   const fetchData = async () => {
@@ -168,13 +310,59 @@ function AttributesPageInner() {
     fetchData();
   }, []);
 
+  // Re-reads the attribute list without the full-page loading state (used
+  // after reordering, where the table should just change in place).
+  const refreshAttributes = async () => {
+    const res = await fetch('/api/attributes');
+    if (!res.ok) return;
+    const json = await res.json();
+    setAttributes(json.data || []);
+    setSummary(json.summary || { total: 0, businessKeys: 0, references: 0, entities: 0 });
+  };
+
+  const [movingId, setMovingId] = useState<number | null>(null);
+
+  // Moves one attribute a step up/down within its entity. `attributes` comes
+  // back from the API already in form order (sort_order, then id), so the
+  // neighbour is simply the adjacent row of the same entity.
+  const handleMove = async (attr: Attribute, direction: -1 | 1) => {
+    const ordered = attributes.filter((a) => a.entity_id === attr.entity_id);
+    const from = ordered.findIndex((a) => a.id === attr.id);
+    const to = from + direction;
+    if (from < 0 || to < 0 || to >= ordered.length) return;
+
+    const ids = ordered.map((a) => a.id);
+    [ids[from], ids[to]] = [ids[to], ids[from]];
+
+    try {
+      setMovingId(attr.id);
+      const res = await fetch('/api/attributes/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entity_id: attr.entity_id, order: ids }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to reorder attributes');
+      }
+      await refreshAttributes();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to reorder attributes');
+    } finally {
+      setMovingId(null);
+    }
+  };
+
   const getTypeIcon = (dataType: string): IconName => {
     switch (dataType) {
       case 'string':
         return 'font';
       case 'number':
+      case 'integer':
+      case 'decimal':
         return 'numerical';
       case 'date':
+      case 'datetime':
         return 'calendar';
       case 'boolean':
         return 'segmented-control';
@@ -216,6 +404,18 @@ function AttributesPageInner() {
 
   const dataTypes = [...new Set(attributes.map((a) => a.data_type))];
 
+  // Order is per entity and is changed on the entity's full list: with a
+  // search/type filter active the visible neighbours aren't the real ones.
+  const showOrderColumn = entityFilter !== 'all';
+  const reorderEnabled = showOrderColumn && !searchQuery && typeFilter === 'all';
+  const positionById = new Map<number, number>();
+  if (showOrderColumn) {
+    attributes
+      .filter((a) => a.entity_id === Number(entityFilter))
+      .forEach((a, i) => positionById.set(a.id, i));
+  }
+  const lastPosition = positionById.size - 1;
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('de-DE');
   };
@@ -236,7 +436,13 @@ function AttributesPageInner() {
           is_unique: newAttribute.is_unique,
           is_business_key: newAttribute.is_business_key,
           description: newAttribute.description || null,
-          reference_entity_id: newAttribute.data_type === 'reference' ? newAttribute.reference_entity_id : null
+          reference_entity_id: newAttribute.data_type === 'reference' ? newAttribute.reference_entity_id : null,
+          ...(newAttribute.data_type === 'reference' && {
+            reference_value_attribute: newAttribute.reference.value_attribute || null,
+            reference_display_attribute: newAttribute.reference.display_attribute || null,
+            cascade_parent_attribute: newAttribute.reference.cascade_parent || null,
+            cascade_filter_attribute: newAttribute.reference.cascade_parent ? newAttribute.reference.cascade_filter || null : null,
+          }),
         })
       });
       
@@ -256,6 +462,7 @@ function AttributesPageInner() {
         is_unique: false,
         is_business_key: false,
         description: '',
+        reference: NO_REFERENCE_SETTINGS,
       });
       fetchData();
     } catch (err) {
@@ -275,6 +482,12 @@ function AttributesPageInner() {
       is_unique: attr.is_unique,
       is_business_key: attr.is_business_key,
       max_length: attr.max_length?.toString() || '',
+      reference: {
+        value_attribute: attr.reference_value_attribute || '',
+        display_attribute: attr.reference_display_attribute || '',
+        cascade_parent: attr.cascade_parent_attribute || '',
+        cascade_filter: attr.cascade_filter_attribute || '',
+      },
     });
     setShowEditDialog(true);
   };
@@ -295,6 +508,12 @@ function AttributesPageInner() {
           is_unique: editAttribute.is_unique,
           is_business_key: editAttribute.is_business_key,
           max_length: editAttribute.max_length ? parseInt(editAttribute.max_length) : null,
+          ...(selectedAttribute.data_type === 'reference' && {
+            reference_value_attribute: editAttribute.reference.value_attribute || null,
+            reference_display_attribute: editAttribute.reference.display_attribute || null,
+            cascade_parent_attribute: editAttribute.reference.cascade_parent || null,
+            cascade_filter_attribute: editAttribute.reference.cascade_parent ? editAttribute.reference.cascade_filter || null : null,
+          }),
         })
       });
       
@@ -431,6 +650,7 @@ function AttributesPageInner() {
             <HTMLTable striped interactive style={{ width: '100%' }}>
               <thead>
                 <tr>
+                  {showOrderColumn && <th>Order</th>}
                   <th>Name</th>
                   <th>Display Name</th>
                   <th>Entity</th>
@@ -444,6 +664,31 @@ function AttributesPageInner() {
               <tbody>
                 {filteredAttributes.map((attr) => (
                   <tr key={attr.id}>
+                    {showOrderColumn && (
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        <ButtonGroup minimal>
+                          <Tooltip content={reorderEnabled ? 'Move up' : 'Clear search and type filter to reorder'}>
+                            <Button
+                              icon="arrow-up"
+                              small
+                              disabled={!reorderEnabled || movingId !== null || positionById.get(attr.id) === 0}
+                              onClick={() => handleMove(attr, -1)}
+                            />
+                          </Tooltip>
+                          <Tooltip content={reorderEnabled ? 'Move down' : 'Clear search and type filter to reorder'}>
+                            <Button
+                              icon="arrow-down"
+                              small
+                              disabled={!reorderEnabled || movingId !== null || positionById.get(attr.id) === lastPosition}
+                              onClick={() => handleMove(attr, 1)}
+                            />
+                          </Tooltip>
+                        </ButtonGroup>
+                        <span className="text-muted" style={{ marginLeft: 6, fontSize: 12 }}>
+                          {(positionById.get(attr.id) ?? 0) + 1}
+                        </span>
+                      </td>
+                    )}
                     <td>
                       <code>{attr.code}</code>
                     </td>
@@ -491,9 +736,26 @@ function AttributesPageInner() {
                     </td>
                     <td>
                       {attr.reference_entity_code ? (
-                        <Tag icon="link" minimal interactive>
-                          {attr.reference_entity_code}
-                        </Tag>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          <Tag icon="link" minimal interactive>
+                            {attr.reference_entity_code}
+                          </Tag>
+                          {attr.reference_value_attribute && (
+                            <Tooltip content="Gespeicherter Wert (statt Business Key)">
+                              <Tag minimal>Wert: {attr.reference_value_attribute}</Tag>
+                            </Tooltip>
+                          )}
+                          {attr.reference_display_attribute && (
+                            <Tooltip content="Angezeigtes Feld im Dropdown">
+                              <Tag minimal>Anzeige: {attr.reference_display_attribute}</Tag>
+                            </Tooltip>
+                          )}
+                          {attr.cascade_parent_attribute && (
+                            <Tooltip content={`Zeigt nur Einträge, deren ${attr.cascade_filter_attribute} zum gewählten ${attr.cascade_parent_attribute} passt`}>
+                              <Tag icon="flow-end" intent="primary" minimal>abhängig von {attr.cascade_parent_attribute}</Tag>
+                            </Tooltip>
+                          )}
+                        </div>
                       ) : (
                         '-'
                       )}
@@ -593,7 +855,7 @@ function AttributesPageInner() {
                   id="attr-ref"
                   value={newAttribute.reference_entity_id}
                   onChange={(e) =>
-                    setNewAttribute({ ...newAttribute, reference_entity_id: Number(e.target.value) })
+                    setNewAttribute({ ...newAttribute, reference_entity_id: Number(e.target.value), reference: NO_REFERENCE_SETTINGS })
                   }
                   fill
                 >
@@ -605,6 +867,16 @@ function AttributesPageInner() {
                   ))}
                 </HTMLSelect>
               </FormGroup>
+            )}
+            {newAttribute.data_type === 'reference' && !!newAttribute.reference_entity_id && (
+              <ReferenceSettingsFields
+                ownEntityId={newAttribute.entity_id}
+                ownCode=""
+                referencedEntityId={newAttribute.reference_entity_id}
+                attributes={attributes}
+                value={newAttribute.reference}
+                onChange={(reference) => setNewAttribute({ ...newAttribute, reference })}
+              />
             )}
             {newAttribute.data_type === 'string' && (
               <FormGroup label="Max Length" labelFor="attr-length">
@@ -715,6 +987,16 @@ function AttributesPageInner() {
                 onChange={(e) => setEditAttribute({ ...editAttribute, max_length: e.target.value })}
               />
             </FormGroup>
+          )}
+          {selectedAttribute?.data_type === 'reference' && !!selectedAttribute.reference_entity_id && (
+            <ReferenceSettingsFields
+              ownEntityId={selectedAttribute.entity_id}
+              ownCode={selectedAttribute.code}
+              referencedEntityId={selectedAttribute.reference_entity_id}
+              attributes={attributes}
+              value={editAttribute.reference}
+              onChange={(reference) => setEditAttribute({ ...editAttribute, reference })}
+            />
           )}
           <div style={{ display: 'flex', gap: 16, marginTop: 16 }}>
             <Checkbox

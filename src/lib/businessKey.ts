@@ -6,7 +6,7 @@ import { dbQuery } from '@/lib/db-server'
 // an imported one are built the same way.
 export async function getBusinessKeyAttributeCodes(entityId: number): Promise<string[]> {
   const rows = await dbQuery<{ code: string }>(
-    'SELECT code FROM mds_meta.attribute WHERE entity_id = @entityId AND is_business_key = 1 ORDER BY sort_order',
+    'SELECT code FROM mds_meta.attribute WHERE entity_id = @entityId AND is_business_key = 1 ORDER BY sort_order, id',
     { entityId }
   )
   return rows.map(r => r.code)

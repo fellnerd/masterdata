@@ -2,6 +2,7 @@ import { dbQuery, dbExecute } from '@/lib/db-server'
 import type { ServiceResult } from './types'
 import { upsertSchemaDeployment } from './schemaDeployment'
 import { redeployViewsForEntity } from './viewDeployService'
+import { validateReferenceConfig, normalizeReferenceConfig, findValueAttributeUsage } from '@/lib/referenceConfig'
 
 export interface Attribute {
   id: number
@@ -25,6 +26,14 @@ export interface Attribute {
   default_value: string | null
   reference_entity_id: number | null
   reference_entity_code?: string | null
+  /** Attribute (code) of the referenced entity stored as this attribute's value; null = its business key. */
+  reference_value_attribute: string | null
+  /** Attribute (code) of the referenced entity shown in the dropdown; null = same as the value. */
+  reference_display_attribute: string | null
+  /** Attribute (code) of THIS entity whose value narrows the dropdown (cascade); null = no cascade. */
+  cascade_parent_attribute: string | null
+  /** Attribute (code) of the REFERENCED entity compared with the parent's value. */
+  cascade_filter_attribute: string | null
   validation_regex: string | null
   sort_order: number
   created_at: string
@@ -55,6 +64,10 @@ export async function listAttributes(entityId?: number): Promise<ServiceResult<A
       a.default_value,
       a.reference_entity_id,
       ref.code AS reference_entity_code,
+      a.reference_value_attribute,
+      a.reference_display_attribute,
+      a.cascade_parent_attribute,
+      a.cascade_filter_attribute,
       a.validation_regex,
       a.sort_order,
       a.created_at,
@@ -72,7 +85,7 @@ export async function listAttributes(entityId?: number): Promise<ServiceResult<A
     sql += ` WHERE a.entity_id = @entityId`
     params.entityId = entityId
   }
-  sql += ` ORDER BY e.name, a.sort_order, a.name`
+  sql += ` ORDER BY e.name, a.sort_order, a.id`
 
   const results = await dbQuery<Attribute>(sql, params)
   return { ok: true, data: results }
@@ -113,7 +126,12 @@ export interface CreateAttributeInput {
   is_unique?: boolean
   default_value?: string | null
   reference_entity_id?: number | null
+  reference_value_attribute?: string | null
+  reference_display_attribute?: string | null
+  cascade_parent_attribute?: string | null
+  cascade_filter_attribute?: string | null
   validation_regex?: string | null
+  /** Position in forms/exports; omitted = appended after the entity's last attribute. */
   sort_order?: number
   created_by?: string
 }
@@ -134,8 +152,12 @@ export async function createAttribute(input: CreateAttributeInput): Promise<Serv
     is_unique = false,
     default_value,
     reference_entity_id,
+    reference_value_attribute,
+    reference_display_attribute,
+    cascade_parent_attribute,
+    cascade_filter_attribute,
     validation_regex,
-    sort_order = 0,
+    sort_order,
     created_by = 'admin'
   } = input
 
@@ -159,13 +181,40 @@ export async function createAttribute(input: CreateAttributeInput): Promise<Serv
     return { ok: false, status: 409, error: 'Attribute with this code already exists in this entity' }
   }
 
+  const refCfg = normalizeReferenceConfig({
+    data_type,
+    reference_entity_id: reference_entity_id ?? null,
+    reference_value_attribute: reference_value_attribute ?? null,
+    reference_display_attribute: reference_display_attribute ?? null,
+    cascade_parent_attribute: cascade_parent_attribute ?? null,
+    cascade_filter_attribute: cascade_filter_attribute ?? null,
+  })
+  const refError = await validateReferenceConfig(entity_id, code, refCfg)
+  if (refError) {
+    return { ok: false, status: 400, error: refError }
+  }
+
+  // Without an explicit position the attribute goes last. (It used to default
+  // to 0, so every new attribute tied with all the others and the form order
+  // fell back to alphabetical.)
+  let position = sort_order
+  if (position === undefined || position === null) {
+    const max = await dbQuery<{ max_order: number | null }>(
+      'SELECT MAX(sort_order) AS max_order FROM [mds_meta].[attribute] WHERE entity_id = @entityId',
+      { entityId: entity_id }
+    )
+    position = (max[0]?.max_order ?? 0) + 10
+  }
+
   await dbExecute(
     `INSERT INTO [mds_meta].[attribute]
       (entity_id, code, name, description, data_type, sql_type, max_length, [precision], scale,
        is_required, is_business_key, is_unique, default_value, reference_entity_id,
+       reference_value_attribute, reference_display_attribute, cascade_parent_attribute, cascade_filter_attribute,
        validation_regex, sort_order, created_by, updated_by)
      VALUES (@entityId, @code, @name, @description, @dataType, @sqlType, @maxLength, @precision, @scale,
              @isRequired, @isBusinessKey, @isUnique, @defaultValue, @referenceEntityId,
+             @refValueAttr, @refDisplayAttr, @cascadeParent, @cascadeFilter,
              @validationRegex, @sortOrder, @user, @user)`,
     {
       entityId: entity_id,
@@ -182,8 +231,12 @@ export async function createAttribute(input: CreateAttributeInput): Promise<Serv
       isUnique: is_unique,
       defaultValue: default_value || null,
       referenceEntityId: reference_entity_id || null,
+      refValueAttr: refCfg.reference_value_attribute,
+      refDisplayAttr: refCfg.reference_display_attribute,
+      cascadeParent: refCfg.cascade_parent_attribute,
+      cascadeFilter: refCfg.cascade_filter_attribute,
       validationRegex: validation_regex || null,
-      sortOrder: sort_order,
+      sortOrder: position,
       user: created_by
     }
   )
@@ -214,6 +267,10 @@ export interface UpdateAttributeInput {
   is_unique?: boolean
   default_value?: string | null
   reference_entity_id?: number | null
+  reference_value_attribute?: string | null
+  reference_display_attribute?: string | null
+  cascade_parent_attribute?: string | null
+  cascade_filter_attribute?: string | null
   validation_regex?: string | null
   sort_order?: number
   updated_by?: string
@@ -231,6 +288,7 @@ export async function updateAttribute(
   const {
     code, name, description, data_type, sql_type, max_length, precision, scale,
     is_required, is_business_key, is_unique, default_value, reference_entity_id,
+    reference_value_attribute, reference_display_attribute, cascade_parent_attribute, cascade_filter_attribute,
     validation_regex, sort_order, updated_by = 'admin'
   } = input
 
@@ -249,11 +307,21 @@ export async function updateAttribute(
   if (is_unique !== undefined) { updates.push('is_unique = @is_unique'); queryParams.is_unique = is_unique }
   if (default_value !== undefined) { updates.push('default_value = @default_value'); queryParams.default_value = default_value }
   if (reference_entity_id !== undefined) { updates.push('reference_entity_id = @reference_entity_id'); queryParams.reference_entity_id = reference_entity_id }
+  if (reference_value_attribute !== undefined) { updates.push('reference_value_attribute = @reference_value_attribute'); queryParams.reference_value_attribute = reference_value_attribute || null }
+  if (reference_display_attribute !== undefined) { updates.push('reference_display_attribute = @reference_display_attribute'); queryParams.reference_display_attribute = reference_display_attribute || null }
+  if (cascade_parent_attribute !== undefined) { updates.push('cascade_parent_attribute = @cascade_parent_attribute'); queryParams.cascade_parent_attribute = cascade_parent_attribute || null }
+  if (cascade_filter_attribute !== undefined) { updates.push('cascade_filter_attribute = @cascade_filter_attribute'); queryParams.cascade_filter_attribute = cascade_filter_attribute || null }
   if (validation_regex !== undefined) { updates.push('validation_regex = @validation_regex'); queryParams.validation_regex = validation_regex }
   if (sort_order !== undefined) { updates.push('sort_order = @sort_order'); queryParams.sort_order = sort_order }
 
-  const attrResult = await dbQuery<{ entity_id: number; code: string; data_type: string; precision: number | null; scale: number | null }>(
-    'SELECT entity_id, code, data_type, [precision], scale FROM mds_meta.attribute WHERE id = @id',
+  const attrResult = await dbQuery<{
+    entity_id: number; code: string; data_type: string; precision: number | null; scale: number | null
+    reference_entity_id: number | null; reference_value_attribute: string | null; reference_display_attribute: string | null
+    cascade_parent_attribute: string | null; cascade_filter_attribute: string | null
+  }>(
+    `SELECT entity_id, code, data_type, [precision], scale, reference_entity_id, reference_value_attribute,
+            reference_display_attribute, cascade_parent_attribute, cascade_filter_attribute
+     FROM mds_meta.attribute WHERE id = @id`,
     { id }
   )
   if (attrResult.length === 0) {
@@ -277,6 +345,26 @@ export async function updateAttribute(
 
   if (updates.length === 0) {
     return { ok: false, status: 400, error: 'No fields to update' }
+  }
+
+  // Validate the reference/cascade setup as it will be AFTER this update
+  // (merge the incoming fields over the stored ones).
+  const touchesReferenceConfig =
+    reference_value_attribute !== undefined || reference_display_attribute !== undefined ||
+    cascade_parent_attribute !== undefined || cascade_filter_attribute !== undefined ||
+    data_type !== undefined || reference_entity_id !== undefined
+  if (touchesReferenceConfig) {
+    const refError = await validateReferenceConfig(entityId, current.code, {
+      data_type: data_type ?? current.data_type,
+      reference_entity_id: reference_entity_id !== undefined ? reference_entity_id : current.reference_entity_id,
+      reference_value_attribute: reference_value_attribute !== undefined ? reference_value_attribute : current.reference_value_attribute,
+      reference_display_attribute: reference_display_attribute !== undefined ? reference_display_attribute : current.reference_display_attribute,
+      cascade_parent_attribute: cascade_parent_attribute !== undefined ? cascade_parent_attribute : current.cascade_parent_attribute,
+      cascade_filter_attribute: cascade_filter_attribute !== undefined ? cascade_filter_attribute : current.cascade_filter_attribute,
+    })
+    if (refError) {
+      return { ok: false, status: 400, error: refError }
+    }
   }
 
   updates.push('updated_at = GETUTCDATE()')
@@ -330,16 +418,38 @@ async function redeployViewsSafely(
 export async function deleteAttribute(
   id: number
 ): Promise<ServiceResult<{ success: true; entity_id: number; views_redeployed?: string[]; warnings?: string[] }>> {
-  const attrResult = await dbQuery<{ entity_id: number }>(
-    'SELECT entity_id FROM mds_meta.attribute WHERE id = @id',
+  const attrResult = await dbQuery<{ entity_id: number; code: string }>(
+    'SELECT entity_id, code FROM mds_meta.attribute WHERE id = @id',
     { id }
   )
   if (attrResult.length === 0) {
     return { ok: false, status: 404, error: 'Attribute not found' }
   }
   const entityId = attrResult[0].entity_id
+  const attrCode = attrResult[0].code
+
+  // Another reference attribute STORES this attribute's value - deleting it
+  // would silently change what that attribute means, so refuse.
+  const usage = await findValueAttributeUsage(entityId, attrCode)
+  if (usage) {
+    return { ok: false, status: 400, error: usage }
+  }
 
   await dbExecute('DELETE FROM mds_meta.attribute WHERE id = @id', { id })
+
+  // Display / cascade settings that pointed at the deleted attribute just stop
+  // applying: the dropdown falls back to the stored value, the cascade is off.
+  await dbExecute(
+    `UPDATE mds_meta.attribute SET reference_display_attribute = NULL
+     WHERE reference_entity_id = @entityId AND reference_display_attribute = @attrCode`,
+    { entityId, attrCode }
+  )
+  await dbExecute(
+    `UPDATE mds_meta.attribute SET cascade_parent_attribute = NULL, cascade_filter_attribute = NULL
+     WHERE (entity_id = @entityId AND cascade_parent_attribute = @attrCode)
+        OR (reference_entity_id = @entityId AND cascade_filter_attribute = @attrCode)`,
+    { entityId, attrCode }
+  )
   await upsertSchemaDeployment(entityId)
 
   // A deployed view selects this attribute's column by name; once the
@@ -349,4 +459,85 @@ export async function deleteAttribute(
   const redeploy = await redeployViewsSafely(entityId, 'system:attribute-delete')
 
   return { ok: true, data: { success: true, entity_id: entityId, ...redeploy } }
+}
+
+// Sets the order of an entity's attributes (form field order, column order of
+// the next generated models/views). `orderedIds` must contain every attribute
+// id of the entity exactly once; positions become 10, 20, 30, ... so a later
+// single insert/move still has room and ties (the old default: everything 0)
+// are gone.
+//
+// One thing is deliberately NOT free: a composite business key is built by
+// joining the business-key attributes' values in this order (see
+// getBusinessKeyAttributeCodes / import_from_datavault.sql). Reordering them
+// relative to each other would make newly derived keys differ from the keys
+// already stored, so that is refused once the entity has any staged record.
+// Moving non-key attributes around - or around the key attributes - is fine.
+export async function reorderAttributes(
+  entityId: number,
+  orderedIds: number[],
+  updatedBy = 'admin'
+): Promise<ServiceResult<{ entity_id: number; attributes: Pick<Attribute, 'id' | 'code' | 'sort_order'>[] }>> {
+  const current = await dbQuery<{ id: number; code: string; is_business_key: boolean }>(
+    'SELECT id, code, is_business_key FROM mds_meta.attribute WHERE entity_id = @entityId ORDER BY sort_order, id',
+    { entityId }
+  )
+  if (current.length === 0) {
+    return { ok: false, status: 404, error: 'Entity not found or it has no attributes' }
+  }
+
+  if (!Array.isArray(orderedIds) || orderedIds.some(id => !Number.isInteger(id))) {
+    return { ok: false, status: 400, error: 'order must be an array of attribute ids' }
+  }
+  const have = new Set(current.map(a => a.id))
+  const given = new Set(orderedIds)
+  const unknown = orderedIds.filter(id => !have.has(id))
+  const missing = current.filter(a => !given.has(a.id)).map(a => a.id)
+  if (given.size !== orderedIds.length || unknown.length > 0 || missing.length > 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'order must list every attribute of the entity exactly once' +
+        (unknown.length ? ` (not in this entity: ${unknown.join(', ')})` : '') +
+        (missing.length ? ` (missing: ${missing.join(', ')})` : '') +
+        (given.size !== orderedIds.length ? ' (duplicates)' : '')
+    }
+  }
+
+  const byId = new Map(current.map(a => [a.id, a]))
+  const bkBefore = current.filter(a => a.is_business_key).map(a => a.id)
+  const bkAfter = orderedIds.filter(id => byId.get(id)!.is_business_key)
+  if (bkBefore.join(',') !== bkAfter.join(',')) {
+    const staged = await dbQuery<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM mds_stage.staged_record WHERE entity_id = @entityId',
+      { entityId }
+    )
+    if ((staged[0]?.n ?? 0) > 0) {
+      return {
+        ok: false,
+        status: 409,
+        error: 'The relative order of the business-key attributes cannot change while the entity has records: ' +
+          'composite business keys are built in this order, so new keys would no longer match the stored ones. ' +
+          'Move the other attributes instead (keep the business-key attributes in their current order).'
+      }
+    }
+  }
+
+  const caseSql = orderedIds.map((_, i) => `WHEN @id${i} THEN ${(i + 1) * 10}`).join(' ')
+  const params: Record<string, unknown> = { entityId, updatedBy }
+  orderedIds.forEach((id, i) => { params[`id${i}`] = id })
+  await dbExecute(
+    `UPDATE mds_meta.attribute
+     SET sort_order = CASE id ${caseSql} END, updated_at = GETUTCDATE(), updated_by = @updatedBy
+     WHERE entity_id = @entityId`,
+    params
+  )
+
+  return {
+    ok: true,
+    data: {
+      entity_id: entityId,
+      attributes: orderedIds.map((id, i) => ({ id, code: byId.get(id)!.code, sort_order: (i + 1) * 10 })),
+    },
+  }
 }

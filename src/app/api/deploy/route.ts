@@ -315,7 +315,7 @@ async function ensureLoadTable(entity: Entity): Promise<void> {
     `SELECT id, code, name, data_type, max_length, is_required, is_business_key, sort_order
      FROM mds_meta.attribute 
      WHERE entity_id = @entityId
-     ORDER BY sort_order`,
+     ORDER BY sort_order, id`,
     { entityId: entity.id }
   )
   
