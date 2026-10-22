@@ -483,6 +483,27 @@ CREATE TABLE mds_meta.permission (
 );
 {% endset %}
 
+{% set shared_audit_sql %}
+-- mds_meta.entity.is_shared: readable by EVERY user that has any permission (reference
+-- data such as units or languages that several models point at). Only a global admin
+-- sets it. Everything else about an entity is visible only through the permission model.
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('mds_meta.entity') AND name = 'is_shared')
+BEGIN
+    ALTER TABLE mds_meta.entity ADD is_shared BIT NOT NULL CONSTRAINT DF_entity_is_shared DEFAULT 0;
+END
+
+-- mds_meta.permission_audit: who changed which permission / sharing, and when.
+IF NOT EXISTS (SELECT * FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'mds_meta' AND t.name = 'permission_audit')
+CREATE TABLE mds_meta.permission_audit (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    actor NVARCHAR(255) NULL,
+    action NVARCHAR(40) NOT NULL,
+    subject NVARCHAR(500) NULL,
+    detail NVARCHAR(1000) NULL
+);
+{% endset %}
+
 {% set api_token_sql %}
 -- mds_meta.api_token Tabelle (gehashte API-Tokens pro User)
 IF NOT EXISTS (SELECT * FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'mds_meta' AND t.name = 'api_token')
@@ -554,6 +575,9 @@ CREATE INDEX IX_api_token_user_id ON mds_meta.api_token(user_id);
 
 {{ log("Creating mds_meta.permission tables...", info=True) }}
 {% do run_query(permission_sql) %}
+
+{{ log("Creating mds_meta.is_shared + permission_audit...", info=True) }}
+{% do run_query(shared_audit_sql) %}
 
 {{ log("Creating mds_meta.api_token table...", info=True) }}
 {% do run_query(api_token_sql) %}

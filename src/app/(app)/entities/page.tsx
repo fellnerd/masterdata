@@ -20,6 +20,7 @@ import { KpiCard, KpiGrid } from '@/components/ui/KpiCard'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import { DvColumnPicker } from '@/components/data/DvColumnPicker'
 import { useFilterPersistence } from '@/hooks/useFilterPersistence'
+import { useAccess } from '@/components/providers/AccessProvider'
 
 interface Entity {
   id: number
@@ -29,6 +30,7 @@ interface Entity {
   model_id: number
   model_code: string
   scd_type: 'SCD1' | 'SCD2'
+  is_shared?: boolean
   status: 'draft' | 'active' | 'deprecated'
   primary_key_attribute: string | null
   attribute_count: number
@@ -91,6 +93,7 @@ function EntitiesPageInner() {
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
+  const access = useAccess()
   const [isEditing, setIsEditing] = useState(false)
   const [editEntity, setEditEntity] = useState<Entity | null>(null)
   const [newEntity, setNewEntity] = useState({
@@ -210,7 +213,9 @@ function EntitiesPageInner() {
         body: JSON.stringify({
           name: editEntity.name,
           description: editEntity.description,
-          scd_type: editEntity.scd_type
+          scd_type: editEntity.scd_type,
+          // only a global admin may share an entity (the API enforces it as well)
+          ...(access.capabilities.system && { is_shared: !!editEntity.is_shared })
         })
       })
       
@@ -517,6 +522,9 @@ function EntitiesPageInner() {
                         <Tag minimal intent={entity.scd_type === 'SCD2' ? 'success' : 'none'}>
                           {entity.scd_type}
                         </Tag>
+                        {entity.is_shared && (
+                          <Tag minimal intent="primary" icon="globe" style={{ marginLeft: 4 }} title="Für alle Benutzer lesbar">gemeinsam</Tag>
+                        )}
                       </td>
                       <td>
                         {entity.import_source_object ? (
@@ -610,6 +618,18 @@ function EntitiesPageInner() {
               ]}
             />
           </FormGroup>
+          {access.capabilities.system && (
+            <Checkbox
+              label="Gemeinsam (für alle Benutzer lesbar)"
+              checked={!!editEntity?.is_shared}
+              onChange={(e) => editEntity && setEditEntity({ ...editEntity, is_shared: (e.target as HTMLInputElement).checked })}
+            >
+              <span className="text-muted" style={{ display: 'block', fontSize: 12 }}>
+                Für Stammdaten, auf die mehrere Models verweisen (z. B. Einheiten, Sprachen). Jeder Benutzer mit
+                irgendeiner Berechtigung darf sie lesen, aber nicht ändern.
+              </span>
+            </Checkbox>
+          )}
         </div>
         <div className="bp5-dialog-footer">
           <div className="bp5-dialog-footer-actions">

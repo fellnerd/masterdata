@@ -18,6 +18,8 @@ export interface Entity {
   record_count: number | null
   status: 'draft' | 'active' | 'deprecated'
   scd_type: 'SCD1' | 'SCD2'
+  /** Readable by every user with any permission (reference data several models point at). */
+  is_shared?: boolean
   primary_key_attribute: string | null
   import_source_object?: string | null
   import_column_mapping?: Record<string, string> | null
@@ -123,6 +125,7 @@ export async function listEntities(modelId?: number): Promise<ServiceResult<Enti
       CAST(NULL AS INT) AS record_count,
       e.status,
       e.scd_type,
+      e.is_shared,
       e.primary_key_attribute,
       e.import_source_object,
       e.import_column_mapping,
@@ -294,13 +297,15 @@ export interface UpdateEntityInput {
   description?: string | null
   scd_type?: string
   status?: string
+  /** Readable by everyone with any permission. A global admin sets this (the routes check). */
+  is_shared?: boolean
   updated_by?: string
 }
 
 // Preserves the internal route's exact prior response shape. Callers that
 // need the full updated resource (v1 PUT) should follow up with getEntity(id).
 export async function updateEntity(id: number, input: UpdateEntityInput): Promise<ServiceResult<{ entity_id: number; updated_at: string }>> {
-  const { name, description, scd_type, status, updated_by = 'admin' } = input
+  const { name, description, scd_type, status, is_shared, updated_by = 'admin' } = input
 
   const updates: string[] = []
   const queryParams: Record<string, unknown> = { id }
@@ -309,6 +314,9 @@ export async function updateEntity(id: number, input: UpdateEntityInput): Promis
   if (description !== undefined) { updates.push('description = @description'); queryParams.description = description }
   if (scd_type !== undefined) { updates.push('scd_type = @scd_type'); queryParams.scd_type = scd_type }
   if (status !== undefined) { updates.push('status = @status'); queryParams.status = status }
+  // sharing is not a schema change: it must not mark the entity for "Deploy Schema"
+  const schemaChange = updates.length > 0
+  if (is_shared !== undefined) { updates.push('is_shared = @is_shared'); queryParams.is_shared = is_shared ? 1 : 0 }
 
   if (updates.length === 0) {
     return { ok: false, status: 400, error: 'No fields to update' }
@@ -319,7 +327,7 @@ export async function updateEntity(id: number, input: UpdateEntityInput): Promis
   queryParams.updated_by = updated_by
 
   await dbExecute(`UPDATE mds_meta.entity SET ${updates.join(', ')} WHERE id = @id`, queryParams)
-  await upsertSchemaDeployment(id)
+  if (schemaChange) await upsertSchemaDeployment(id)
 
   return { ok: true, data: { entity_id: id, updated_at: new Date().toISOString() } }
 }

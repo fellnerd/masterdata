@@ -83,3 +83,18 @@ test('visibility respects the action: a viewer sees but does not "write" anythin
   assert.equal(w.all, false)
   if (!w.all) assert.equal(w.entityIds.size, 0)
 })
+
+test('shared entities are readable by everyone with any permission - and by nobody without one', () => {
+  const withShared: EntityInfo[] = [{ id: 1, modelId: 10 }, { id: 5, modelId: 99, shared: true }]
+  const viewer: Grant[] = [{ role: 'viewer', scope: 'model', modelId: 10 }]
+  assert.equal(can(viewer, 'read', { entityId: 5, modelId: 99, shared: true }), true)
+  assert.equal(can(viewer, 'write', { entityId: 5, modelId: 99, shared: true }), false, 'shared is read-only')
+  assert.equal(can([], 'read', { entityId: 5, modelId: 99, shared: true }), false)
+  const v = visibleScope(viewer, 'read', withShared)
+  assert.equal(v.all === false && v.entityIds.has(5), true)
+  assert.equal(v.all === false && v.entityIds.has(1), true)
+  const none = visibleScope([], 'read', withShared)
+  assert.equal(none.all === false && none.entityIds.size, 0)
+  const w = visibleScope(viewer, 'write', withShared)
+  assert.equal(w.all === false && w.entityIds.has(5), false)
+})

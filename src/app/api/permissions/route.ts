@@ -3,6 +3,7 @@ import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { requireAccess, principalFromSession, clearPermissionCache, ROLES } from '@/lib/permissions'
 import { resolveMissingGroupNames } from '@/lib/entraGroups'
+import { recordAudit, recentAudit } from '@/lib/permissions/audit'
 import { auth } from '@/lib/auth'
 
 export const runtime = 'nodejs'
@@ -65,7 +66,7 @@ export async function GET() {
       `SELECT e.id, e.code, e.name, e.model_id, m.code AS model_code
        FROM mds_meta.entity e JOIN mds_meta.model m ON m.id = e.model_id ORDER BY m.code, e.name`
     )
-    return NextResponse.json({ permissions, groups, models, entities })
+    return NextResponse.json({ permissions, groups, models, entities, audit: await recentAudit(50) })
   } catch (error) {
     logger.error({ error }, 'GET /api/permissions failed')
     return NextResponse.json({ error: 'Failed to load permissions', details: String(error) }, { status: 500 })
@@ -140,6 +141,14 @@ export async function POST(request: NextRequest) {
       }
     )
     clearPermissionCache()
+
+    const scopeText = scope_type === 'global' ? 'global' : scope_type === 'model' ? `model #${model_id}` : `entity #${entity_id}`
+    await recordAudit({
+      actor: p?.email,
+      action: 'grant',
+      subject: group.display_name ?? `group ${entra_group_id}`,
+      detail: `${role} on ${scopeText}`,
+    })
     return NextResponse.json({ success: true }, { status: 201 })
   } catch (error) {
     logger.error({ error }, 'POST /api/permissions failed')
@@ -155,8 +164,18 @@ export async function DELETE(request: NextRequest) {
   try {
     const id = parseInt(new URL(request.url).searchParams.get('id') ?? '')
     if (!Number.isInteger(id)) return NextResponse.json({ error: 'id is required' }, { status: 400 })
+    const before = await dbQuery<{ role: string; scope_type: string; model_id: number | null; entity_id: number | null; group_name: string | null }>(
+      `SELECT p.role, p.scope_type, p.model_id, p.entity_id, g.display_name AS group_name
+       FROM mds_meta.permission p JOIN mds_meta.entra_group g ON g.id = p.entra_group_id WHERE p.id = @id`,
+      { id }
+    )
     await dbExecute("DELETE FROM mds_meta.permission WHERE id = @id AND subject_type = 'entra_group'", { id })
     clearPermissionCache()
+    if (before[0]) {
+      const b = before[0]
+      const scopeText = b.scope_type === 'global' ? 'global' : b.scope_type === 'model' ? `model #${b.model_id}` : `entity #${b.entity_id}`
+      await recordAudit({ actor: (await principalFromSession())?.email, action: 'revoke', subject: b.group_name, detail: `${b.role} on ${scopeText}` })
+    }
     return NextResponse.json({ success: true })
   } catch (error) {
     logger.error({ error }, 'DELETE /api/permissions failed')

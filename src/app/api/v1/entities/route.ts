@@ -15,6 +15,7 @@ interface EntityRow {
   description: string | null
   status: string
   scd_type: string
+  is_shared?: boolean
   model_id: number
   model_code: string
   model_name: string
@@ -66,7 +67,7 @@ export async function GET(request: NextRequest) {
     }
 
     const allEntities = await dbQuery<EntityRow>(
-      `SELECT e.id, e.code, e.name, e.description, e.status, e.scd_type,
+      `SELECT e.id, e.code, e.name, e.description, e.status, e.scd_type, e.is_shared,
               e.model_id, m.code AS model_code, m.name AS model_name
        FROM mds_meta.entity e
        INNER JOIN mds_meta.model m ON m.id = e.model_id

@@ -25,6 +25,12 @@ interface ReferenceInputProps {
    * (via `key`) when that value changes - see data/page.tsx.
    */
   cascadeFilter?: { attribute: string; value: string }
+  /**
+   * The referencing attribute's id. With it the choices come from /api/reference-lookup (business key + label
+   * only, allowed for whoever may read that attribute's own entity - so values of an entity in another model
+   * can be picked without being able to browse it). Without it the referenced entity's records are read directly.
+   */
+  lookupAttributeId?: number
 }
 
 const text = (v: unknown) => (v === undefined || v === null ? '' : String(v))
@@ -38,7 +44,7 @@ const text = (v: unknown) => (v === undefined || v === null ? '' : String(v))
 // filter the server already narrows the list to the selected parent.
 export function ReferenceInput({
   id, referencedEntityId, referencedEntityName, value, onChange, intent,
-  displayAttribute, cascadeFilter,
+  displayAttribute, cascadeFilter, lookupAttributeId,
 }: ReferenceInputProps) {
   const [candidates, setCandidates] = useState<ReferenceRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -57,13 +63,26 @@ export function ReferenceInput({
     const filter = filterAttribute && filterValue
       ? `&attr.${encodeURIComponent(filterAttribute)}.exact=${encodeURIComponent(filterValue)}`
       : ''
-    fetch(`/api/records?entity_id=${referencedEntityId}&pageSize=500${filter}`)
+    const url = lookupAttributeId
+      ? `/api/reference-lookup?attribute_id=${lookupAttributeId}${filterValue ? `&parent_value=${encodeURIComponent(filterValue)}` : ''}`
+      : `/api/records?entity_id=${referencedEntityId}&pageSize=500${filter}`
+    fetch(url)
       .then(res => {
         if (!res.ok) throw new Error('Failed to load reference candidates')
         return res.json()
       })
       .then(json => {
         if (cancelled) return
+        if (lookupAttributeId) {
+          // already (business key, label): put the label where labelOf() looks for it
+          const options = (json.data || []) as Array<{ business_key: string; label: string }>
+          setCandidates(options.map((o, i) => ({
+            id: i,
+            business_key: o.business_key,
+            data: displayAttribute ? { [displayAttribute]: o.label } : {},
+          })))
+          return
+        }
         const rows = (json.data || []) as Array<{ id: number; business_key: string; data: unknown }>
         setCandidates(rows.map(r => ({
           id: r.id,
@@ -74,7 +93,7 @@ export function ReferenceInput({
       .catch(() => { if (!cancelled) setLoadError(true) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [referencedEntityId, filterAttribute, filterValue])
+  }, [referencedEntityId, filterAttribute, filterValue, lookupAttributeId, displayAttribute])
 
   const valueOf = (c: ReferenceRecord) => c.business_key
   const labelOf = (c: ReferenceRecord) => {

@@ -187,6 +187,42 @@ export default function UsersPage() {
     }
   }
 
+  // "What can this user do, and why?" - grants with their source, plus what they can reach
+  const [accessUser, setAccessUser] = useState<User | null>(null)
+  const [access, setAccess] = useState<{
+    grants: Array<{ role: string; scope: string; target: string | null; source: { type: string; label: string | null } }>
+    groups: Array<{ object_id: string; name: string | null }>
+    readable: Array<{ id: number; name: string; model: string }>
+    writable: Array<{ id: number; name: string; model: string }>
+    approvable: Array<{ id: number; name: string; model: string }>
+    schema: Array<{ id: number; name: string; model: string }>
+    capabilities: { system: boolean }
+  } | null>(null)
+  const [accessError, setAccessError] = useState<string | null>(null)
+
+  const openAccessDialog = async (user: User) => {
+    setAccessUser(user)
+    setAccess(null)
+    setAccessError(null)
+    try {
+      const res = await fetch(`/api/users/${user.id}/access`)
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed to load access')
+      setAccess(await res.json())
+    } catch (err) {
+      setAccessError(err instanceof Error ? err.message : 'Failed to load access')
+    }
+  }
+
+  const sourceLabel = (s: { type: string; label: string | null }) =>
+    s.type === 'group' ? `Gruppe ${s.label}` : s.type === 'direct_role' ? 'Direkte Rolle (Users-Seite)' : 'Direkt zugewiesen'
+
+  const entityList = (items: Array<{ id: number; name: string; model: string }> | undefined) =>
+    !items || items.length === 0
+      ? <span className="text-muted">nichts</span>
+      : items.map(e => (
+          <Tag key={e.id} minimal style={{ marginRight: 4, marginBottom: 4 }} title={e.model}>{e.name}</Tag>
+        ))
+
   const openTokenDialog = async (user: User) => {
     setTokenDialogUser(user)
     setNewTokenName('')
@@ -378,6 +414,7 @@ export default function UsersPage() {
                       title={user.status === 'active' ? 'Deactivate' : 'Activate'}
                       onClick={() => handleToggleStatus(user)}
                     />
+                    <Button small minimal icon="shield" title="Effective access" onClick={() => openAccessDialog(user)} />
                     <Button small minimal icon="key" title="API Tokens" onClick={() => openTokenDialog(user)} />
                     <Button small minimal icon="trash" intent="danger" title="Delete" onClick={() => setDeleteTarget(user)} />
                   </td>
@@ -387,6 +424,55 @@ export default function UsersPage() {
           </HTMLTable>
         )}
       </div>
+
+      {/* Effective access dialog */}
+      <Dialog
+        isOpen={accessUser !== null}
+        onClose={() => setAccessUser(null)}
+        title={`Effective access: ${accessUser?.name || accessUser?.email || ''}`}
+        icon="shield"
+        style={{ width: 720 }}
+      >
+        <div className="bp5-dialog-body">
+          {accessError && <Callout intent="danger">{accessError}</Callout>}
+          {!access && !accessError && <Spinner />}
+          {access && (
+            <>
+              <Callout icon="info-sign" style={{ marginBottom: 12 }}>
+                Gruppen laut <strong>letzter Anmeldung</strong> des Benutzers ({accessUser?.last_login_at ? formatDate(accessUser.last_login_at) : 'noch nie'}).
+                Änderungen in Entra wirken nach der nächsten Anmeldung.
+              </Callout>
+              <h4>Berechtigungen</h4>
+              {access.grants.length === 0 ? (
+                <p className="text-muted">Keine - der Benutzer hat keinen Zugriff.</p>
+              ) : (
+                <HTMLTable compact striped style={{ width: '100%', marginBottom: 12 }}>
+                  <thead><tr><th>Rolle</th><th>Gilt für</th><th>Quelle</th></tr></thead>
+                  <tbody>
+                    {access.grants.map((g, i) => (
+                      <tr key={i}>
+                        <td><Tag minimal intent={getRoleIntent(g.role as Role)}>{g.role}</Tag></td>
+                        <td>{g.scope === 'global' ? 'Alles (global)' : `${g.scope === 'model' ? 'Model' : 'Entity'} ${g.target}`}</td>
+                        <td className="text-muted">{sourceLabel(g.source)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </HTMLTable>
+              )}
+              <h4>Entra-Gruppen</h4>
+              <p>{access.groups.length > 0 ? access.groups.map(g => <Tag key={g.object_id} minimal style={{ marginRight: 4 }}>{g.name ?? g.object_id}</Tag>) : <span className="text-muted">keine bekannt</span>}</p>
+              <h4>Kann lesen</h4>
+              <p>{entityList(access.readable)}</p>
+              <h4>Kann Datensätze pflegen</h4>
+              <p>{entityList(access.writable)}</p>
+              <h4>Kann freigeben / deployen</h4>
+              <p>{entityList(access.approvable)}</p>
+              <h4>Kann das Schema ändern</h4>
+              <p>{entityList(access.schema)}{access.capabilities.system && <Tag intent="danger" minimal style={{ marginLeft: 4 }}>+ System (Models, Benutzer, Rechte)</Tag>}</p>
+            </>
+          )}
+        </div>
+      </Dialog>
 
       {/* Add/Edit User Dialog */}
       <Dialog

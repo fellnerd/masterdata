@@ -29,6 +29,7 @@ interface Group {
   known_members: number;
   permission_count: number;
 }
+interface AuditEntry { id: number; at: string; actor: string | null; action: string; subject: string | null; detail: string | null }
 interface Model { id: number; code: string; name: string }
 interface Entity { id: number; code: string; name: string; model_id: number; model_code: string }
 
@@ -57,6 +58,7 @@ export default function PermissionsPage() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
+  const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,6 +78,7 @@ export default function PermissionsPage() {
       setGroups(json.groups);
       setModels(json.models);
       setEntities(json.entities);
+      setAudit(json.audit ?? []);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load permissions');
@@ -226,6 +229,28 @@ export default function PermissionsPage() {
         </HTMLTable>
       ) : (
         <NonIdealState icon="people" title="Noch keine Gruppen gesehen" description="Sobald sich ein Benutzer mit Entra-Gruppen anmeldet, erscheinen sie hier." />
+      )}
+
+      <SectionHeader title="Änderungsprotokoll" />
+      {audit.length > 0 ? (
+        <HTMLTable striped style={{ width: '100%', marginTop: 8 }}>
+          <thead>
+            <tr><th>Zeitpunkt</th><th>Von</th><th>Aktion</th><th>Betrifft</th><th>Details</th></tr>
+          </thead>
+          <tbody>
+            {audit.map((a) => (
+              <tr key={a.id}>
+                <td className="text-muted" style={{ whiteSpace: 'nowrap' }}>{new Date(a.at).toLocaleString('de-DE')}</td>
+                <td>{a.actor ?? '—'}</td>
+                <td><Tag minimal intent={a.action === 'revoke' || a.action === 'user_delete' ? 'danger' : 'none'}>{a.action}</Tag></td>
+                <td>{a.subject ?? '—'}</td>
+                <td className="text-muted">{a.detail ?? ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </HTMLTable>
+      ) : (
+        <NonIdealState icon="history" title="Noch keine Änderungen protokolliert" />
       )}
 
       <Dialog isOpen={showAdd} onClose={() => setShowAdd(false)} title="Add Permission" icon="shield">

@@ -39,8 +39,10 @@ export function clearPermissionCache(): void {
 
 export async function loadEntityInfos(): Promise<EntityInfo[]> {
   return cached('entities', async () => {
-    const rows = await dbQuery<{ id: number; model_id: number }>('SELECT id, model_id FROM mds_meta.entity')
-    return rows.map(r => ({ id: r.id, modelId: r.model_id }))
+    const rows = await dbQuery<{ id: number; model_id: number; is_shared: boolean | null }>(
+      'SELECT id, model_id, is_shared FROM mds_meta.entity'
+    )
+    return rows.map(r => ({ id: r.id, modelId: r.model_id, shared: !!r.is_shared }))
   })
 }
 
@@ -58,10 +60,22 @@ function toGrant(r: GrantRow): Grant | null {
   return null
 }
 
-export async function loadGrants(p: Principal): Promise<Grant[]> {
-  const key = `grants:${p.userId}:${p.tenantId ?? ''}:${[...p.groupIds].sort().join(',')}`
+export interface GrantSource {
+  type: 'direct_role' | 'user_permission' | 'group'
+  /** group display name (or id) for type 'group' */
+  label: string | null
+}
+export interface SourcedGrant {
+  grant: Grant
+  source: GrantSource
+}
+
+// Every grant of the principal together with where it comes from (for the
+// "effective access" view); loadGrants() is the same list without the source.
+export async function loadSourcedGrants(p: Principal): Promise<SourcedGrant[]> {
+  const key = `sourced:${p.userId}:${p.tenantId ?? ''}:${[...p.groupIds].sort().join(',')}`
   return cached(key, async () => {
-    const grants: Grant[] = []
+    const out: SourcedGrant[] = []
 
     // direct, legacy roles (global, or per model when model_id is set)
     const direct = await dbQuery<{ role: Role; model_id: number | null }>(
@@ -69,7 +83,10 @@ export async function loadGrants(p: Principal): Promise<Grant[]> {
       { userId: p.userId }
     )
     for (const r of direct) {
-      grants.push(r.model_id == null ? { role: r.role, scope: 'global' } : { role: r.role, scope: 'model', modelId: r.model_id })
+      out.push({
+        grant: r.model_id == null ? { role: r.role, scope: 'global' } : { role: r.role, scope: 'model', modelId: r.model_id },
+        source: { type: 'direct_role', label: null },
+      })
     }
 
     // permissions granted to the user directly
@@ -78,24 +95,31 @@ export async function loadGrants(p: Principal): Promise<Grant[]> {
        WHERE subject_type = 'user' AND user_id = @userId`,
       { userId: p.userId }
     )
-    for (const r of own) { const g = toGrant(r); if (g) grants.push(g) }
+    for (const r of own) { const g = toGrant(r); if (g) out.push({ grant: g, source: { type: 'user_permission', label: null } }) }
 
     // permissions granted to the Entra groups of this sign-in
     if (p.tenantId && p.groupIds.length > 0) {
       const params: Record<string, unknown> = { tenantId: p.tenantId }
       const placeholders = p.groupIds.map((id, i) => { params[`g${i}`] = id; return `@g${i}` }).join(', ')
-      const viaGroups = await dbQuery<GrantRow>(
-        `SELECT p.role, p.scope_type, p.model_id, p.entity_id
+      const viaGroups = await dbQuery<GrantRow & { group_name: string | null; object_id: string }>(
+        `SELECT p.role, p.scope_type, p.model_id, p.entity_id, g.display_name AS group_name, g.object_id
          FROM mds_meta.permission p
          JOIN mds_meta.entra_group g ON g.id = p.entra_group_id
          WHERE p.subject_type = 'entra_group' AND g.tenant_id = @tenantId AND g.object_id IN (${placeholders})`,
         params
       )
-      for (const r of viaGroups) { const g = toGrant(r); if (g) grants.push(g) }
+      for (const r of viaGroups) {
+        const g = toGrant(r)
+        if (g) out.push({ grant: g, source: { type: 'group', label: r.group_name ?? r.object_id } })
+      }
     }
 
-    return grants
+    return out
   })
+}
+
+export async function loadGrants(p: Principal): Promise<Grant[]> {
+  return (await loadSourcedGrants(p)).map(s => s.grant)
 }
 
 async function userIdByEmail(email: string): Promise<number | null> {
@@ -144,7 +168,7 @@ export async function principalFromUserId(userId: number): Promise<Principal | n
 export async function resolveTarget(target: Target): Promise<Target> {
   if (target.entityId != null && target.modelId == null) {
     const entity = (await loadEntityInfos()).find(e => e.id === target.entityId)
-    return { entityId: target.entityId, modelId: entity?.modelId ?? null }
+    return { entityId: target.entityId, modelId: entity?.modelId ?? null, shared: entity?.shared ?? false }
   }
   return target
 }

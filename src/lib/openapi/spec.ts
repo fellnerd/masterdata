@@ -44,7 +44,8 @@ export const openApiSpec = {
       'sign-in, granted globally, per model or per entity): lists only contain what the owner may read; an entity ' +
       'outside their permissions answers `403`; an owner without any permission gets `403` with `code: "no_access"`. ' +
       'Roles: viewer reads, editor also writes staged records, approver also approves, admin also changes the schema ' +
-      'of that model/entity. Creating/deleting models needs a global admin.',
+      'of that model/entity. Creating/deleting models needs a global admin. Entities flagged `is_shared` (set by a global admin) ' +
+      'are readable by every user with any permission.',
   },
   servers: [{ url: '/api/v1' }],
   security: [{ bearerAuth: [] }],
@@ -505,6 +506,30 @@ export const openApiSpec = {
           403: { description: 'Missing scope or not admin', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           404: { description: 'Entity not found or has no attributes', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           409: { description: 'Would change the relative order of business-key attributes of an entity that has records', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+        },
+      },
+    },
+    '/attributes/{id}/lookup': {
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+      get: {
+        summary: 'Choices of a reference attribute',
+        description:
+          'The selectable values of a `reference` attribute as `{ business_key, label }`, sorted by label (`label` = the attribute\'s ' +
+          '`reference_display_attribute`, else the business key). For a cascade child pass the parent attribute\'s current value as ' +
+          '`parent_value`. Needs only read access to the attribute\'s OWN entity - not to the referenced entity, which may live in a model ' +
+          'the caller cannot read (only key and label are returned). Staged values are validated on the server regardless.',
+        tags: ['Attributes'],
+        security: [{ bearerAuth: ['entities:read'] }],
+        parameters: [
+          { name: 'parent_value', in: 'query', schema: { type: 'string' }, description: 'Current value of the cascade parent attribute (narrows the list)' },
+          { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Contains-filter on business key / label' },
+          { name: 'limit', in: 'query', schema: { type: 'integer', default: 500, maximum: 1000 } },
+        ],
+        responses: {
+          200: { description: 'OK', content: { 'application/json': { schema: { type: 'object', properties: { data: { type: 'array', items: { type: 'object', properties: { business_key: { type: 'string' }, label: { type: 'string' } } } }, total: { type: 'integer' } } } } } },
+          400: { description: 'Not a reference attribute', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          403: { description: 'Token owner may not read the attribute\'s own entity', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          404: { description: 'Attribute not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },
     },

@@ -32,6 +32,8 @@ export type Grant =
 export interface Target {
   modelId?: number | null
   entityId?: number | null
+  /** The entity is flagged shared (readable by everyone with any permission) - filled in by the loader. */
+  shared?: boolean
 }
 
 export function roleAllows(role: Role, action: Action): boolean {
@@ -39,6 +41,8 @@ export function roleAllows(role: Role, action: Action): boolean {
 }
 
 export function can(grants: Grant[], action: Action, target: Target = {}): boolean {
+  // shared reference data (units, languages, ...) is readable by every user with any permission
+  if (action === 'read' && target.shared && grants.length > 0) return true
   for (const g of grants) {
     if (action === 'system') {
       // only a global admin runs the system
@@ -61,6 +65,8 @@ export function hasAnyAccess(grants: Grant[]): boolean {
 export interface EntityInfo {
   id: number
   modelId: number
+  /** readable by every user with any permission */
+  shared?: boolean
 }
 
 export type Visibility = { all: true } | { all: false; entityIds: Set<number>; modelIds: Set<number> }
@@ -70,6 +76,11 @@ export type Visibility = { all: true } | { all: false; entityIds: Set<number>; m
 export function visibleScope(grants: Grant[], action: Action, entities: EntityInfo[]): Visibility {
   const entityIds = new Set<number>()
   const modelIds = new Set<number>()
+  if (action === 'read' && grants.length > 0) {
+    for (const e of entities) {
+      if (e.shared) { entityIds.add(e.id); modelIds.add(e.modelId) }
+    }
+  }
   for (const g of grants) {
     if (!roleAllows(g.role, action)) continue
     if (g.scope === 'global') return { all: true }

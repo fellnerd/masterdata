@@ -292,6 +292,7 @@ function DataEntryPageInner() {
           id={fieldId}
           referencedEntityId={attr.reference_entity_id}
           referencedEntityName={attr.reference_entity_code || undefined}
+          lookupAttributeId={attr.id}
           displayAttribute={attr.reference_display_attribute}
           cascadeFilter={cascadeFilter}
           value={String(values[attr.code] ?? '')}
@@ -765,6 +766,7 @@ function DataEntryPageInner() {
                       id={`filter-${attr.code}`}
                       referencedEntityId={attr.reference_entity_id}
                       referencedEntityName={attr.reference_entity_code || undefined}
+                      lookupAttributeId={attr.id}
                       displayAttribute={attr.reference_display_attribute}
                       value={attributeFilters[key] ?? ''}
                       onChange={(v) => update({ [key]: v })}

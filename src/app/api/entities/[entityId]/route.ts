@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { getEntity, updateEntity, deleteEntity } from '@/lib/services/entityService'
-import { requireAccess, getVisibility, modelAllowed, entityAllowed } from '@/lib/permissions'
+import { recordAudit } from '@/lib/permissions/audit'
+import { principalFromSession, requireAccess, getVisibility, modelAllowed, entityAllowed } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,9 +46,24 @@ export async function PUT(
 
   try {
     const body = await request.json()
+
+    // sharing an entity with everyone is a system-level decision (global admin)
+    if (body?.is_shared !== undefined) {
+      const sharingDenied = await requireAccess('system')
+      if (sharingDenied) return sharingDenied
+    }
+
     const result = await updateEntity(parseInt(entityId), body)
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status })
+    }
+    if (body?.is_shared !== undefined) {
+      await recordAudit({
+        actor: (await principalFromSession())?.email,
+        action: body.is_shared ? 'entity_share' : 'entity_unshare',
+        subject: `entity #${entityId}`,
+        detail: body.is_shared ? 'readable by every user with any permission' : 'no longer shared',
+      })
     }
     return NextResponse.json(result.data)
   } catch (error) {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
+import { recordAudit } from '@/lib/permissions/audit'
 import { requireTokenAccess, getTokenVisibility, entityAllowed } from '@/lib/permissions'
 import { resolveEntityId, getEntity, updateEntity, deleteEntity } from '@/lib/services/entityService'
 
@@ -63,9 +64,24 @@ export async function PUT(
     if (denied) return denied
 
     const body = await request.json()
+
+    // sharing an entity with everyone is a system-level decision (global admin)
+    if (body?.is_shared !== undefined) {
+      const sharingDenied = await requireTokenAccess(auth.userId, 'system')
+      if (sharingDenied) return sharingDenied
+    }
+
     const result = await updateEntity(resolved.data, { ...body, updated_by: `token:${auth.userId}` })
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status })
+    }
+    if (body?.is_shared !== undefined) {
+      await recordAudit({
+        actor: `token:${auth.userId}`,
+        action: body.is_shared ? 'entity_share' : 'entity_unshare',
+        subject: `entity #${resolved.data}`,
+        detail: body.is_shared ? 'readable by every user with any permission' : 'no longer shared',
+      })
     }
 
     // v1 returns the full updated resource, not just {entity_id, updated_at}

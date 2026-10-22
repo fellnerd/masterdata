@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
-import { requireAccess, requireSelfEmailOrSystem } from '@/lib/permissions'
+import { requireAccess, requireSelfEmailOrSystem, principalFromSession, clearPermissionCache } from '@/lib/permissions'
+import { recordAudit } from '@/lib/permissions/audit'
 
 export interface ApiUser {
   id: number
@@ -156,6 +157,8 @@ export async function POST(request: NextRequest) {
     )
 
     const result = created[0]
+    clearPermissionCache()
+    await recordAudit({ actor: (await principalFromSession())?.email, action: 'user_invite', subject: email, detail: `role ${role}` })
     return NextResponse.json(
       { ...result, roles: result.roles ? result.roles.split(',') : [] },
       { status: 201 }
@@ -222,6 +225,10 @@ export async function PATCH(request: NextRequest) {
     }
 
     const result = updated[0]
+    clearPermissionCache()
+    const actor = (await principalFromSession())?.email
+    if (role !== undefined) await recordAudit({ actor, action: 'user_role', subject: result.email, detail: `global role set to ${role}` })
+    if (status !== undefined) await recordAudit({ actor, action: 'user_status', subject: result.email, detail: `status set to ${status}` })
     return NextResponse.json({ ...result, roles: result.roles ? result.roles.split(',') : [] })
   } catch (error) {
     logger.error({ error }, 'Failed to update user')
@@ -248,6 +255,7 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'id parameter is required' }, { status: 400 })
     }
 
+    const doomed = await dbQuery<{ email: string }>('SELECT email FROM mds_meta.[user] WHERE id = @id', { id: parseInt(id) })
     const rowsAffected = await dbExecute(
       'DELETE FROM mds_meta.[user] WHERE id = @id',
       { id: parseInt(id) }
@@ -256,6 +264,8 @@ export async function DELETE(request: NextRequest) {
     if (rowsAffected === 0) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
+    clearPermissionCache()
+    await recordAudit({ actor: (await principalFromSession())?.email, action: 'user_delete', subject: doomed[0]?.email ?? `user ${id}` })
 
     return NextResponse.json({ success: true })
   } catch (error) {
