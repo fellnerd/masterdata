@@ -168,19 +168,6 @@ export const fullAuthConfig: NextAuthConfig = {
         extendedToken.tenantId = claims.tid;
         extendedToken.groupsOverage = !!claims._claim_names?.groups;
 
-        // Remember the groups (and their names) MDS has seen - best-effort.
-        if (extendedToken.tenantId) {
-          try {
-            await recordEntraGroups({
-              tenantId: extendedToken.tenantId,
-              groupIds: extendedToken.groups,
-              accessToken: account.access_token,
-            });
-          } catch (error) {
-            console.error('Failed to record Entra groups:', error);
-          }
-        }
-
         // Provision the user record + load roles. Only runs once, right here
         // at sign-in (this callback executes in the Node.js auth route, not
         // in edge middleware) - the result is cached in the JWT afterwards.
@@ -195,6 +182,21 @@ export const fullAuthConfig: NextAuthConfig = {
           } catch (error) {
             console.error('Failed to provision user / load roles:', error);
             extendedToken.roles = extendedToken.roles ?? ['viewer'];
+          }
+
+          // Remember the groups MDS has seen and this user's membership snapshot
+          // (the user row exists now) - best-effort, never blocks the sign-in.
+          if (extendedToken.tenantId) {
+            try {
+              await recordEntraGroups({
+                tenantId: extendedToken.tenantId,
+                groupIds: extendedToken.groups ?? [],
+                accessToken: account.access_token,
+                userEmail: extendedToken.email,
+              });
+            } catch (error) {
+              console.error('Failed to record Entra groups:', error);
+            }
           }
         }
       }

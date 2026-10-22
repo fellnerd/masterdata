@@ -428,6 +428,61 @@ CREATE TABLE mds_meta.entra_group (
 );
 {% endset %}
 
+{% set permission_sql %}
+-- mds_meta.entra_group: what kind of object the id is, and whether membership is
+-- dynamic (a dynamic group like "Alle Benutzer" must not be used to grant access).
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('mds_meta.entra_group') AND name = 'kind')
+BEGIN
+    ALTER TABLE mds_meta.entra_group ADD kind NVARCHAR(20) NOT NULL CONSTRAINT DF_entra_group_kind DEFAULT 'group';
+END
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('mds_meta.entra_group') AND name = 'is_dynamic')
+BEGIN
+    ALTER TABLE mds_meta.entra_group ADD is_dynamic BIT NULL;
+END
+
+-- mds_meta.user_entra_group: the groups a user had at their last sign-in (a
+-- snapshot - Entra stays the source of truth). Used for the Users page filter and
+-- for API tokens, which have no sign-in of their own.
+IF NOT EXISTS (SELECT * FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'mds_meta' AND t.name = 'user_entra_group')
+CREATE TABLE mds_meta.user_entra_group (
+    user_id INT NOT NULL,
+    entra_group_id INT NOT NULL,
+    last_seen_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    CONSTRAINT PK_user_entra_group PRIMARY KEY (user_id, entra_group_id),
+    CONSTRAINT FK__user_entra_group__user FOREIGN KEY (user_id) REFERENCES mds_meta.[user](id) ON DELETE CASCADE,
+    CONSTRAINT FK__user_entra_group__group FOREIGN KEY (entra_group_id) REFERENCES mds_meta.entra_group(id) ON DELETE CASCADE
+);
+
+-- mds_meta.permission: "role R on scope S" granted to an Entra group (or, rarely,
+-- directly to a user). Scope is global, one model, or one entity. Combined with the
+-- legacy mds_meta.user_role rows (direct global / per-model roles).
+IF NOT EXISTS (SELECT * FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'mds_meta' AND t.name = 'permission')
+CREATE TABLE mds_meta.permission (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    subject_type NVARCHAR(20) NOT NULL,
+    entra_group_id INT NULL,
+    user_id INT NULL,
+    role NVARCHAR(20) NOT NULL,
+    scope_type NVARCHAR(10) NOT NULL,
+    model_id INT NULL,
+    entity_id INT NULL,
+    created_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    created_by NVARCHAR(100) NULL,
+    CONSTRAINT CK_permission_subject CHECK (
+        (subject_type = 'entra_group' AND entra_group_id IS NOT NULL AND user_id IS NULL) OR
+        (subject_type = 'user' AND user_id IS NOT NULL AND entra_group_id IS NULL)),
+    CONSTRAINT CK_permission_role CHECK (role IN ('viewer', 'editor', 'approver', 'admin')),
+    CONSTRAINT CK_permission_scope CHECK (
+        (scope_type = 'global' AND model_id IS NULL AND entity_id IS NULL) OR
+        (scope_type = 'model' AND model_id IS NOT NULL AND entity_id IS NULL) OR
+        (scope_type = 'entity' AND entity_id IS NOT NULL AND model_id IS NULL)),
+    CONSTRAINT FK__permission__group FOREIGN KEY (entra_group_id) REFERENCES mds_meta.entra_group(id) ON DELETE CASCADE,
+    CONSTRAINT FK__permission__user FOREIGN KEY (user_id) REFERENCES mds_meta.[user](id) ON DELETE CASCADE,
+    CONSTRAINT FK__permission__model FOREIGN KEY (model_id) REFERENCES mds_meta.model(id),
+    CONSTRAINT FK__permission__entity FOREIGN KEY (entity_id) REFERENCES mds_meta.entity(id)
+);
+{% endset %}
+
 {% set api_token_sql %}
 -- mds_meta.api_token Tabelle (gehashte API-Tokens pro User)
 IF NOT EXISTS (SELECT * FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'mds_meta' AND t.name = 'api_token')
@@ -496,6 +551,9 @@ CREATE INDEX IX_api_token_user_id ON mds_meta.api_token(user_id);
 
 {{ log("Creating mds_meta.entra_group table...", info=True) }}
 {% do run_query(entra_group_sql) %}
+
+{{ log("Creating mds_meta.permission tables...", info=True) }}
+{% do run_query(permission_sql) %}
 
 {{ log("Creating mds_meta.api_token table...", info=True) }}
 {% do run_query(api_token_sql) %}
