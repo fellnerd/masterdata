@@ -207,6 +207,39 @@ async function handleGithubAction(job: Job<MdsJobData>): Promise<void> {
   throw new Error(`Timeout beim Warten auf Workflow-Abschluss: ${runUrl}`);
 }
 
+// dbt's on_schema_change='sync_all_columns' sometimes adds a NEW attribute column to an
+// existing load/master table as NVARCHAR(1), and the next load then fails with "String or
+// binary data would be truncated". Widen any such attribute column to NVARCHAR(MAX) before
+// dbt runs (an attribute value is never legitimately 1 character wide by design here -
+// every attribute column is created as wide text).
+async function repairNarrowColumns(job: Job<MdsJobData>, entityCodes: string[]): Promise<void> {
+  if (entityCodes.length === 0) return;
+  const pool = await getDbPool();
+  const request = pool.request();
+  const placeholders = entityCodes.map((code, i) => {
+    request.input(`code${i}`, sql.NVarChar, code.toLowerCase());
+    return `@code${i}`;
+  }).join(', ');
+  const narrow = await request.query(`
+    SELECT s.name AS sch, o.name AS tbl, c.name AS col
+    FROM sys.columns c
+    JOIN sys.objects o ON o.object_id = c.object_id AND o.type = 'U'
+    JOIN sys.schemas s ON s.schema_id = o.schema_id
+    JOIN sys.types t ON t.user_type_id = c.user_type_id
+    WHERE s.name IN ('mds_load', 'mds_master')
+      AND LOWER(o.name) IN (${placeholders})
+      AND t.name = 'nvarchar' AND c.max_length = 2
+      AND c.name IN (
+        SELECT a.code FROM mds_meta.attribute a JOIN mds_meta.entity e ON e.id = a.entity_id
+        WHERE LOWER(e.code) = LOWER(o.name)
+      )`);
+  for (const row of narrow.recordset as Array<{ sch: string; tbl: string; col: string }>) {
+    const sqlText = `ALTER TABLE [${row.sch}].[${row.tbl}] ALTER COLUMN [${row.col}] NVARCHAR(MAX) NULL`;
+    console.log(`[${job.id}] Widening narrow column: ${sqlText}`);
+    await pool.request().query(sqlText);
+  }
+}
+
 // Runs generate_models.py for the given entity codes (looked up to ids first).
 async function regenerateModelsForEntities(job: Job<MdsJobData>, entityCodes: string[]): Promise<void> {
   const pool = await getDbPool();
@@ -270,6 +303,7 @@ async function handleDeploy(job: Job<MdsJobData>): Promise<void> {
   // a data deploy must not depend on that. Generating them is cheap and idempotent.
   await updateProgress(job, 5, 'Preparing dbt models...', ['🔧 Regenerating the models of the deployed entities...']);
   await regenerateModelsForEntities(job, entityCodes);
+  await repairNarrowColumns(job, entityCodes);
 
   // Step 1: Run dbt load models (staged_record → mds_load)
   await updateProgress(job, 10, 'Loading data to mds_load tables...', []);
@@ -718,6 +752,8 @@ async function handleSchemaDeploy(job: Job<MdsJobData>): Promise<void> {
     if (genResult.exitCode !== 0) {
       throw new Error(`generate_models.py failed with exit code ${genResult.exitCode}\n${genResult.stderr}`);
     }
+
+    await repairNarrowColumns(job, job.data.entityCodes || []);
 
     await updateProgress(job, 50, 'Models generated successfully', [
       '✅ generate_models.py completed',

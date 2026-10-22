@@ -132,6 +132,15 @@ export interface CreateAttributeInput {
   created_by?: string
 }
 
+// Columns every load/master table has of its own. An attribute with one of these codes would
+// produce a table/view with that column twice (SQL error "Column names ... must be unique" at
+// Deploy Schema), so such codes are refused up front.
+export const RESERVED_ATTRIBUTE_CODES = [
+  'business_key', 'business_key_hash', 'valid_from', 'valid_to', 'is_current', 'is_deleted',
+  'commit_id', 'operation', 'source_system', 'source_id', 'source_load_id', 'is_processed',
+  'created_at', 'created_by', 'updated_at', 'updated_by', 'processed_at', 'load_id', 'load_timestamp',
+]
+
 export async function createAttribute(input: CreateAttributeInput): Promise<ServiceResult<Attribute>> {
   const {
     entity_id,
@@ -158,6 +167,14 @@ export async function createAttribute(input: CreateAttributeInput): Promise<Serv
 
   if (!entity_id || !code || !name) {
     return { ok: false, status: 400, error: 'entity_id, code and name are required' }
+  }
+  if (RESERVED_ATTRIBUTE_CODES.includes(String(code).toLowerCase())) {
+    return {
+      ok: false,
+      status: 400,
+      error: `"${code}" is a reserved column name (every table has its own ${RESERVED_ATTRIBUTE_CODES.slice(0, 6).join(', ')}, ...). ` +
+        `Pick another code, e.g. "${code}_date" or a more specific name.`
+    }
   }
 
   const entity = await dbQuery<{ id: number }>(
