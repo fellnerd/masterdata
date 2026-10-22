@@ -31,6 +31,7 @@ const navigation: NavSection[] = [
       { icon: 'th', label: 'Entities', href: '/entities' },
       { icon: 'column-layout', label: 'Attributes', href: '/attributes' },
       { icon: 'eye-open', label: 'Views', href: '/views' },
+      { icon: 'diagram-tree', label: 'Designer', href: '/designer' },
     ]
   },
   {
