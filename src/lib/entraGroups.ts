@@ -116,3 +116,46 @@ export async function lookupEntraGroups(tenantId: string, objectIds: string[]): 
     params
   )
 }
+
+// Fills in names (and the kind: group or directory role) for groups MDS has only
+// seen as ids - e.g. the group of a member who has not signed in since names were
+// recorded. Runs with the signed-in ADMIN's delegated token (GroupMember.Read.All),
+// so it works for any group they can see, not just their own. Best-effort.
+export async function resolveMissingGroupNames(tenantId: string, accessToken: string): Promise<void> {
+  const missing = await dbQuery<{ id: number; object_id: string }>(
+    `SELECT TOP 50 id, object_id FROM mds_meta.entra_group
+     WHERE tenant_id = @tenantId AND display_name IS NULL`,
+    { tenantId }
+  )
+  const headers = { Authorization: `Bearer ${accessToken}` }
+
+  for (const g of missing) {
+    try {
+      const res = await fetch(`https://graph.microsoft.com/v1.0/groups/${g.object_id}?$select=id,displayName,groupTypes`, { headers })
+      if (res.ok) {
+        const json = (await res.json()) as { displayName?: string | null; groupTypes?: string[] }
+        if (json.displayName) {
+          await dbExecute(
+            `UPDATE mds_meta.entra_group SET display_name = @name, kind = 'group', is_dynamic = @dyn WHERE id = @id`,
+            { id: g.id, name: json.displayName, dyn: (json.groupTypes ?? []).includes('DynamicMembership') ? 1 : 0 }
+          )
+        }
+        continue
+      }
+      if (res.status === 401 || res.status === 403) return // token expired / no permission: nothing more to try
+      // not a group: probably a directory role (e.g. "Cloud Application Administrator")
+      const obj = await fetch(`https://graph.microsoft.com/v1.0/directoryObjects/${g.object_id}`, { headers })
+      if (obj.ok) {
+        const json = (await obj.json()) as { '@odata.type'?: string; displayName?: string | null }
+        if (json['@odata.type'] === '#microsoft.graph.directoryRole') {
+          await dbExecute(
+            `UPDATE mds_meta.entra_group SET display_name = COALESCE(@name, display_name), kind = 'role' WHERE id = @id`,
+            { id: g.id, name: json.displayName ?? null }
+          )
+        }
+      }
+    } catch {
+      // network problem - leave the id as is
+    }
+  }
+}

@@ -12,6 +12,7 @@ interface Permission {
   id: number;
   entra_group_id: number;
   tenant_id: string;
+  object_id: string;
   group_name: string | null;
   is_dynamic: boolean | null;
   role: string;
@@ -183,7 +184,7 @@ export default function PermissionsPage() {
             {permissions.map((p) => (
               <tr key={p.id}>
                 <td>
-                  {p.group_name ?? <code>{p.tenant_id}</code>}
+                  {p.group_name ?? <code>{p.object_id}</code>}
                   {p.is_dynamic && (
                     <Tooltip content="Dynamische Gruppe: Mitglieder werden automatisch nach einer Regel aufgenommen">
                       <Tag intent="warning" minimal style={{ marginLeft: 6 }}>dynamisch</Tag>

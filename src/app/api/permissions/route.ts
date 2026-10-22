@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { requireAccess, principalFromSession, clearPermissionCache, ROLES } from '@/lib/permissions'
+import { resolveMissingGroupNames } from '@/lib/entraGroups'
+import { auth } from '@/lib/auth'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -32,6 +34,13 @@ export async function GET() {
   if (denied) return denied
 
   try {
+    // groups seen only as ids (their members have not signed in since names are recorded):
+    // look the names up with this admin's own token
+    const session = (await auth()) as { accessToken?: string; user?: { tenantId?: string } } | null
+    if (session?.accessToken && session.user?.tenantId) {
+      await resolveMissingGroupNames(session.user.tenantId, session.accessToken)
+    }
+
     const permissions = await dbQuery<PermissionRow>(
       `SELECT p.id, p.entra_group_id, g.tenant_id, g.object_id, g.display_name AS group_name, g.is_dynamic,
               p.role, p.scope_type, p.model_id, m.code AS model_code, p.entity_id, e.name AS entity_name,
