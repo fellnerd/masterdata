@@ -107,14 +107,15 @@ export async function POST(request: NextRequest) {
         
         const commit = commits[0]
         
-        if (commit.status !== 'approved') {
+        // 'loaded' commits (data in mds_load, master step unfinished) may be deployed again
+        if (commit.status !== 'approved' && commit.status !== 'loaded') {
           results.push({
             commit_id: commitId,
             entity_id: commit.entity_id,
             entity_name: 'Unknown',
             records_deployed: 0,
             status: 'failed',
-            error: `Commit status is '${commit.status}', expected 'approved'`
+            error: `Commit status is '${commit.status}', expected 'approved' (or 'loaded' to finish an interrupted deploy)`
           })
           continue
         }
@@ -205,14 +206,15 @@ export async function POST(request: NextRequest) {
         await dbExecute(
           `INSERT INTO mds_load.deployment_log 
            (deployment_id, commit_id, entity_id, entity_code, records_deployed, status, started_at, completed_at, deployed_by)
-           VALUES (@deploymentId, @commitId, @entityId, @entityCode, @recordsDeployed, @status, GETUTCDATE(), GETUTCDATE(), @user)`,
+           VALUES (@deploymentId, @commitId, @entityId, @entityCode, @recordsDeployed, @status, GETUTCDATE(), NULL, @user)`,
           {
             deploymentId,
             commitId: result.commit_id,
             entityId: result.entity_id,
             entityCode,
             recordsDeployed: result.records_deployed,
-            status: 'deployed',
+            // the job sets 'deployed' / 'loaded' / 'failed' when it is really done
+            status: 'running',
             user
           }
         )

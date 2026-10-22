@@ -12,7 +12,7 @@ export interface Commit {
   id: number
   code: string
   description: string | null
-  status: 'draft' | 'pending' | 'approved' | 'rejected' | 'deployed'
+  status: 'draft' | 'pending' | 'approved' | 'loaded' | 'rejected' | 'deployed'
   entity_id: number
   entity_code?: string
   entity_name?: string

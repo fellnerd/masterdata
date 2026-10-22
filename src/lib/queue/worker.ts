@@ -278,6 +278,35 @@ async function regenerateModelsForEntities(job: Job<MdsJobData>, entityCodes: st
  * - 'full': load + master ausführen (status='deployed')
  */
 async function handleDeploy(job: Job<MdsJobData>): Promise<void> {
+  try {
+    await runDeploy(job);
+  } catch (error) {
+    // close the deployment log entry as failed (the commits stay deployable)
+    const params = job.data.params as { commitIds?: number[]; deploymentId?: string } | undefined;
+    if (params?.deploymentId) {
+      try {
+        await fetch(`${process.env.API_BASE_URL || 'http://localhost:3000'}/api/deploy/data/status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-internal-secret': process.env.INTERNAL_API_SECRET || 'mds-worker-secret-dev',
+          },
+          body: JSON.stringify({
+            deploymentId: params.deploymentId,
+            commitIds: params.commitIds ?? [],
+            status: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        });
+      } catch {
+        // the job itself still fails and is visible on the Jobs page
+      }
+    }
+    throw error;
+  }
+}
+
+async function runDeploy(job: Job<MdsJobData>): Promise<void> {
   const { params } = job.data;
   const entityCodes = params?.entityCodes as string[] | undefined;
   const commitIds = params?.commitIds as number[] | undefined;

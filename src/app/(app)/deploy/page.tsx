@@ -24,7 +24,7 @@ interface Commit {
   entity_id: number
   entity_name: string
   record_count: number
-  status: 'pending' | 'approved' | 'rejected' | 'deployed'
+  status: 'pending' | 'approved' | 'loaded' | 'rejected' | 'deployed'
   created_at: string
   created_by: string
   approved_at: string | null
@@ -126,8 +126,10 @@ export default function DeployPage() {
   }
 
   // Filter commits
+  // 'loaded' = the data reached mds_load but the master step did not finish: it must stay
+  // visible (and deployable again) instead of falling between "ready" and "deployed".
   const approvedCommits = useMemo(() => 
-    commits.filter(c => c.status === 'approved'), [commits])
+    commits.filter(c => c.status === 'approved' || c.status === 'loaded'), [commits])
   
   const deployedCommits = useMemo(() => 
     commits.filter(c => c.status === 'deployed'), [commits])
@@ -922,10 +924,11 @@ export default function DeployPage() {
                   <td>{commit.record_count || 0}</td>
                   <td>
                     <Tag 
-                      intent={commit.status === 'deployed' ? 'primary' : 'success'} 
+                      intent={commit.status === 'deployed' ? 'primary' : commit.status === 'loaded' ? 'warning' : 'success'} 
                       minimal
+                      title={commit.status === 'loaded' ? 'Geladen, aber noch nicht in den Master übernommen - erneut deployen' : undefined}
                     >
-                      {commit.status}
+                      {commit.status === 'loaded' ? 'nur geladen' : commit.status}
                     </Tag>
                   </td>
                   <td>

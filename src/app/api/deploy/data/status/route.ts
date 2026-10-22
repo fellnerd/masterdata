@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic'
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { deploymentId, commitIds, status } = body
+    const { deploymentId, commitIds, status, error: errorMessage } = body
     
     if (!deploymentId || !commitIds || !status) {
       return NextResponse.json(
@@ -23,6 +23,17 @@ export async function POST(request: NextRequest) {
     }
     
     logger.info({ deploymentId, commitIds, status }, 'Updating commit status after deploy')
+
+    // A failed deploy leaves the commits as they are (still deployable) and only closes the log entry
+    if (status === 'failed') {
+      await dbExecute(
+        `UPDATE mds_load.deployment_log
+         SET status = 'failed', completed_at = GETUTCDATE(), error_message = @message
+         WHERE deployment_id = @deploymentId`,
+        { deploymentId, message: String(errorMessage ?? 'Deployment failed').slice(0, 4000) }
+      )
+      return NextResponse.json({ success: true, message: 'Deployment logged as failed' })
+    }
     
     // Update commit status
     for (const commitId of commitIds) {
