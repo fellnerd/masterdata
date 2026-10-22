@@ -10,7 +10,7 @@
     "lint": "eslint",
     "worker": "npx ts-node --transpile-only src/lib/queue/worker.ts",
     "worker:dev": "npx tsx watch src/lib/queue/worker.ts",
-    "test": "npx tsx --test src/lib/designer/designer.test.ts"
+    "test": "npx tsx --test src/lib/designer/designer.test.ts src/lib/permissions/core.test.ts"
   },
   "dependencies": {
     "@auth/core": "^0.37.4",

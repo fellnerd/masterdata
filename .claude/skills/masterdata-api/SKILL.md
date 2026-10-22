@@ -88,6 +88,28 @@ on the token at all (issuing user's role at creation time). A 403 with
 issuing user isn't currently admin - a different (currently-admin) user
 needs to issue a fresh token.
 
+## Access control (what a token may actually touch)
+
+The scopes above are only the **outer limit**. Which models and entities a
+request may touch is decided **live, per request**, from the token owner's
+permissions - not from the token:
+
+- Permissions are **roles on a scope**: `viewer` (read) < `editor` (+ write
+  staged records) < `approver` (+ approve commits / deploy data) < `admin` (+
+  change the schema). The scope is **global**, one **model**, or one **entity**.
+- They come from the owner's direct roles and from the **Entra security groups**
+  mapped to roles in the app (Settings -> Permissions). Group membership is the
+  snapshot of the owner's **last sign-in** - a change in Entra reaches tokens
+  after the owner signs in again.
+- Consequences: list endpoints (`models`, `entities`, `views`, `master`,
+  `stage/records`, ...) contain **only what the owner may read**; an entity
+  outside their permissions answers `403` (not `404`); staging needs `editor`+ on
+  the entity; schema writes need `admin` on the model/entity (a model admin may
+  change entities/attributes of **their** model; **creating/deleting models**
+  needs a global admin). An owner with **no permission at all** gets `403` with
+  `"code": "no_access"` on everything.
+- An empty list can therefore mean "nothing visible", not "nothing exists".
+
 ## Endpoints
 
 All list endpoints are paginated: `?page=1&pageSize=50` (`pageSize` capped
@@ -403,7 +425,7 @@ field) with a matching HTTP status:
 |---|---|
 | 400 | Bad request (missing required field, invalid reference value, unknown attribute code in a filter, `attr.*` filter used without `entity_id` on `/stage/records`, invalid entity code format, invalid/negative `page`/`pageSize`, an unknown/empty `fields`/`distinct` value, an invalid reference/cascade configuration or a reference value that doesn't exist / doesn't belong to its cascade parent, `fields` together with `distinct`, `fields`/`distinct` without `entity_id` on `/stage/records`, or a query parameter name the endpoint doesn't recognize at all) |
 | 401 | Missing/empty/invalid/expired/revoked token |
-| 403 | Token valid but missing the required scope, or (Models/Entities/Attributes writes) the token owner isn't currently admin |
+| 403 | Token valid but missing the required scope; or the token owner lacks the permission (role) on that model/entity (`Forbidden: the token owner lacks the <action> permission on this model/entity`); or the owner has no permission at all (`code: "no_access"`) |
 | 404 | Record/entity/model/attribute/view not found, or entity not yet deployed to master |
 | 405 | Write attempted on a read-only endpoint (master, views) |
 | 409 | Duplicate code (Model/Entity/Attribute create), an entity code that's ambiguous across models (add `?model_code=`), a staged record whose business key is already used by another staged record of the entity, or an attribute reorder that would change the relative order of the business-key attributes of an entity with records |

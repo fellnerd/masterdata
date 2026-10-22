@@ -429,7 +429,7 @@ export default function UsersPage() {
 
           {!selectedUser && (
             <Callout icon="info-sign">
-              Der Nutzer wird mit Status "pending" angelegt und automatisch aktiviert, sobald er sich zum ersten Mal einloggt.
+              Der Nutzer wird mit Status &quot;pending&quot; angelegt und automatisch aktiviert, sobald er sich zum ersten Mal einloggt.
             </Callout>
           )}
         </div>

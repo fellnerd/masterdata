@@ -38,7 +38,13 @@ export const openApiSpec = {
       'import triggering.\n\n' +
       '**Known gap:** committing staged records and deploying them to master/views is session-only today ' +
       '(the internal `/api/commits` and `/api/deploy` UI flows) - there is no v1 endpoint for either step yet, ' +
-      'a human has to do that part in the app.',
+      'a human has to do that part in the app.\n\n' +
+      '**Access control:** a token\'s scopes are only the outer limit. What it may touch is decided live per ' +
+      'model/entity from its owner\'s permissions (direct roles and the Entra security groups of their last ' +
+      'sign-in, granted globally, per model or per entity): lists only contain what the owner may read; an entity ' +
+      'outside their permissions answers `403`; an owner without any permission gets `403` with `code: "no_access"`. ' +
+      'Roles: viewer reads, editor also writes staged records, approver also approves, admin also changes the schema ' +
+      'of that model/entity. Creating/deleting models needs a global admin.',
   },
   servers: [{ url: '/api/v1' }],
   security: [{ bearerAuth: [] }],

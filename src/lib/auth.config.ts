@@ -96,7 +96,9 @@ export const authConfig: NextAuthConfig = {
 
   session: {
     strategy: 'jwt',
-    maxAge: 24 * 60 * 60, // 24 hours
+    // Entra group membership is read at sign-in, so a removal in Entra only takes
+    // effect with the next sign-in: keep sessions short (was 24 h).
+    maxAge: 8 * 60 * 60, // 8 hours
   },
 
   trustHost: true,

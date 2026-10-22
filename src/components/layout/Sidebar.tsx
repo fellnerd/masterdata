@@ -68,6 +68,8 @@ export function Sidebar() {
   const { theme, toggleTheme, mounted } = useTheme()
   const access = useAccess()
   const visible = (item: NavItem) => {
+    // nothing to navigate to without any permission (or while it is still loading)
+    if (!access.hasAccess) return false
     if (!item.needs) return true
     const c = access.capabilities
     return item.needs === 'approveOrSchema' ? c.approve || c.schema : c[item.needs]
