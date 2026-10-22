@@ -410,6 +410,24 @@ IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_user_role_user_id')
 CREATE INDEX IX_user_role_user_id ON mds_meta.user_role(user_id);
 {% endset %}
 
+{% set entra_group_sql %}
+-- mds_meta.entra_group: Entra security groups MDS has seen (from the groups
+-- claim at login). Entra owns the groups and their members - this table only
+-- remembers object ids and names so permissions can be mapped to a group and
+-- the UI can show names instead of GUIDs. tenant_id is part of the key so a
+-- customer signing in from their own tenant can have groups too.
+IF NOT EXISTS (SELECT * FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'mds_meta' AND t.name = 'entra_group')
+CREATE TABLE mds_meta.entra_group (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    tenant_id NVARCHAR(36) NOT NULL,
+    object_id NVARCHAR(36) NOT NULL,
+    display_name NVARCHAR(256) NULL,
+    first_seen_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    last_seen_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    CONSTRAINT UQ__entra_group__tenant_object UNIQUE (tenant_id, object_id)
+);
+{% endset %}
+
 {% set api_token_sql %}
 -- mds_meta.api_token Tabelle (gehashte API-Tokens pro User)
 IF NOT EXISTS (SELECT * FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'mds_meta' AND t.name = 'api_token')
@@ -475,6 +493,9 @@ CREATE INDEX IX_api_token_user_id ON mds_meta.api_token(user_id);
 
 {{ log("Creating mds_meta.user_role table...", info=True) }}
 {% do run_query(user_role_sql) %}
+
+{{ log("Creating mds_meta.entra_group table...", info=True) }}
+{% do run_query(entra_group_sql) %}
 
 {{ log("Creating mds_meta.api_token table...", info=True) }}
 {% do run_query(api_token_sql) %}

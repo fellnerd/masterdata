@@ -52,6 +52,14 @@ const formatDate = (dateString: string | null) => {
 
 export default function ProfilePage() {
   const { data: session, status: sessionStatus } = useSession()
+  // groups / tenantId come from the Entra ID token (see jwt() in lib/auth.ts)
+  const sessionUser = {
+    groups: (session?.user as { groups?: string[] } | undefined)?.groups ?? [],
+    tenantId: (session?.user as { tenantId?: string } | undefined)?.tenantId,
+  }
+  // Group names MDS has recorded for the ids above (object id -> name)
+  const [groupNames, setGroupNames] = useState<Record<string, string>>({})
+  const groupKey = `${sessionUser.tenantId ?? ''}|${sessionUser.groups.join(',')}`
   const [profile, setProfile] = useState<ApiUser | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -77,6 +85,21 @@ export default function ProfilePage() {
     fetchProfile()
   }, [sessionStatus, session])
 
+  useEffect(() => {
+    const [tenantId, ids] = groupKey.split('|')
+    if (!tenantId || !ids) return
+    fetch(`/api/entra-groups?tenant_id=${tenantId}&ids=${ids}`)
+      .then(res => (res.ok ? res.json() : { data: [] }))
+      .then(json => {
+        const names: Record<string, string> = {}
+        for (const g of (json.data ?? []) as Array<{ object_id: string; display_name: string | null }>) {
+          if (g.display_name) names[g.object_id] = g.display_name
+        }
+        setGroupNames(names)
+      })
+      .catch(() => {})
+  }, [groupKey])
+
   const displayName = session?.user?.name || profile?.name || 'Unknown User'
   const email = session?.user?.email || profile?.email || ''
   const image = session?.user?.image || profile?.image
@@ -85,7 +108,8 @@ export default function ProfilePage() {
     <>
       <Header title="My Profile" breadcrumb={['Settings', 'Profile']} />
 
-      <div className="page-content" style={{ maxWidth: 600 }}>
+      <div className="page-content">
+       <div style={{ maxWidth: 600 }}>
         {loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
             <Spinner />
@@ -136,6 +160,24 @@ export default function ProfilePage() {
                   ) : '—'}
                 </div>
 
+                <div className="text-muted">Entra tenant</div>
+                <div>
+                  {sessionUser.tenantId ? <code>{sessionUser.tenantId}</code> : '—'}
+                </div>
+
+                <div className="text-muted">Entra groups</div>
+                <div>
+                  {sessionUser.groups.length > 0 ? (
+                    sessionUser.groups.map(g => (
+                      <Tag key={g} minimal style={{ marginRight: 4, marginBottom: 4 }} title={g}>
+                        {groupNames[g] ?? <code>{g}</code>}
+                      </Tag>
+                    ))
+                  ) : (
+                    <span className="text-muted">none in the token (dev login, or not a member of any security group)</span>
+                  )}
+                </div>
+
                 <div className="text-muted">Status</div>
                 <div>
                   {profile ? (
@@ -157,6 +199,7 @@ export default function ProfilePage() {
             </Callout>
           </>
         )}
+       </div>
       </div>
     </>
   )

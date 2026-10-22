@@ -4,6 +4,7 @@ import Credentials from 'next-auth/providers/credentials';
 import type { NextAuthConfig, Session } from 'next-auth';
 import type { JWT } from 'next-auth/jwt';
 import { dbQuery, dbExecute } from '@/lib/db-server';
+import { recordEntraGroups } from '@/lib/entraGroups';
 import { authConfig, type UserRole } from '@/lib/auth.config';
 
 export type { UserRole };
@@ -15,6 +16,8 @@ interface ExtendedUser {
   email?: string | null;
   image?: string | null;
   roles: UserRole[];
+  groups: string[];
+  tenantId?: string;
 }
 
 interface ExtendedSession extends Session {
@@ -25,6 +28,9 @@ interface ExtendedSession extends Session {
 interface ExtendedJWT extends JWT {
   accessToken?: string;
   roles?: UserRole[];
+  groups?: string[];
+  tenantId?: string;
+  groupsOverage?: boolean;
 }
 
 // Provisions the user in mds_meta.user on every login (creates the row on
@@ -127,7 +133,13 @@ const providers = [
           issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER,
           authorization: {
             params: {
-              scope: 'openid profile email User.Read',
+              // GroupMember.Read.All lets the login token read the display names of the
+              // user's groups. It needs tenant-wide admin consent on the app registration
+              // first - without it every sign-in would stop at an "approval required" page -
+              // so it is only requested when AUTH_ENTRA_GROUP_NAMES=true.
+              scope: process.env.AUTH_ENTRA_GROUP_NAMES === 'true'
+                ? 'openid profile email User.Read GroupMember.Read.All'
+                : 'openid profile email User.Read',
             },
           },
         }),
@@ -142,12 +154,32 @@ export const fullAuthConfig: NextAuthConfig = {
   callbacks: {
     ...authConfig.callbacks,
 
-    async jwt({ token, account, user }): Promise<ExtendedJWT> {
+    async jwt({ token, account, user, profile }): Promise<ExtendedJWT> {
       const extendedToken = token as ExtendedJWT;
 
       // Initial sign in
       if (account) {
         extendedToken.accessToken = account.access_token;
+
+        // Entra security groups (groupMembershipClaims=SecurityGroup on the app
+        // registration) and the tenant the user came from. Object ids only.
+        const claims = (profile ?? {}) as { groups?: unknown; tid?: string; _claim_names?: { groups?: string } };
+        extendedToken.groups = Array.isArray(claims.groups) ? claims.groups.filter((g): g is string => typeof g === 'string') : [];
+        extendedToken.tenantId = claims.tid;
+        extendedToken.groupsOverage = !!claims._claim_names?.groups;
+
+        // Remember the groups (and their names) MDS has seen - best-effort.
+        if (extendedToken.tenantId) {
+          try {
+            await recordEntraGroups({
+              tenantId: extendedToken.tenantId,
+              groupIds: extendedToken.groups,
+              accessToken: account.access_token,
+            });
+          } catch (error) {
+            console.error('Failed to record Entra groups:', error);
+          }
+        }
 
         // Provision the user record + load roles. Only runs once, right here
         // at sign-in (this callback executes in the Node.js auth route, not
@@ -190,6 +222,8 @@ export const fullAuthConfig: NextAuthConfig = {
           ...session.user,
           id: extendedToken.sub ?? '',
           roles: extendedToken.roles ?? ['viewer'],
+          groups: extendedToken.groups ?? [],
+          tenantId: extendedToken.tenantId,
         },
         accessToken: extendedToken.accessToken,
       };

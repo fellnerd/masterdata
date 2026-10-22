@@ -21,6 +21,10 @@ interface ExtendedUser {
   email?: string | null;
   image?: string | null;
   roles: UserRole[];
+  /** Object ids of the Entra security groups from the ID token's `groups` claim (empty for the dev login). */
+  groups: string[];
+  /** Entra tenant (`tid`) the user signed in through - differs from ours for customers using their own tenant. */
+  tenantId?: string;
 }
 
 interface ExtendedSession extends Session {
@@ -29,6 +33,10 @@ interface ExtendedSession extends Session {
 
 interface ExtendedJWT extends JWT {
   roles?: UserRole[];
+  groups?: string[];
+  tenantId?: string;
+  /** True when Entra left the groups claim out (user is in more than 200 groups) - memberships must then be fetched from Graph. */
+  groupsOverage?: boolean;
 }
 
 export const authConfig: NextAuthConfig = {
@@ -43,6 +51,8 @@ export const authConfig: NextAuthConfig = {
           ...session.user,
           id: extendedToken.sub ?? '',
           roles: extendedToken.roles ?? ['viewer'],
+          groups: extendedToken.groups ?? [],
+          tenantId: extendedToken.tenantId,
         },
       };
     },
