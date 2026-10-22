@@ -11,6 +11,7 @@ import {
 } from '@/lib/responseShaping'
 import { validateReferenceAttributes } from '@/lib/validateReferences'
 import { getBusinessKeyAttributeCodes, deriveBusinessKey, findRecordByBusinessKey, duplicateBusinessKeyMessage } from '@/lib/businessKey'
+import { requireTokenAccess, getTokenVisibility, entityAllowed, inListSql, entityIdOfRecord } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -62,7 +63,11 @@ export async function GET(request: NextRequest) {
     if (!filterResult.ok) {
       return NextResponse.json({ error: filterResult.error }, { status: filterResult.status })
     }
-    const { whereClause, params } = filterResult
+    // only records of entities the token's owner may read
+    const scope = await getTokenVisibility(auth.userId, 'read')
+    if (!scope.ok) return scope.response
+    const whereClause = `${filterResult.whereClause} AND ${inListSql(scope.visibility, 'r.entity_id', 'entity')}`
+    const { params } = filterResult
 
     // A staged record's fields live in a JSON blob keyed by attribute code, and
     // attribute codes are entity-scoped - so like attr.* filters, ?fields= and
@@ -164,6 +169,9 @@ export async function POST(request: NextRequest) {
     if (!entity_id || !data) {
       return NextResponse.json({ error: 'entity_id and data are required' }, { status: 400 })
     }
+
+    const denied = await requireTokenAccess(auth.userId, 'write', { entityId: Number(entity_id) })
+    if (denied) return denied
 
     const entity = await dbQuery<{ id: number; code: string }>(
       'SELECT id, code FROM mds_meta.entity WHERE id = @entityId',

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { requireAccess } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -51,6 +52,10 @@ function redactSecrets(config: ImportSource) {
 
 // GET /api/settings/import-source - Get current import source config
 export async function GET() {
+  // import source settings hold credentials: global admin only
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   logger.info('GET /api/settings/import-source')
 
   try {
@@ -81,6 +86,10 @@ export async function GET() {
 
 // POST /api/settings/import-source - Update import source config
 export async function POST(request: NextRequest) {
+  // import source settings hold credentials: global admin only
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   logger.info('POST /api/settings/import-source')
   
   try {

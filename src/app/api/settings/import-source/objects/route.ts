@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { DbtModel } from '@/lib/dbt/config-parser'
+import { requireAccess } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -13,6 +14,10 @@ interface ImportSource {
 
 // GET /api/settings/import-source/objects - Get available dbt objects
 export async function GET() {
+  // browsing the source for the import mapping needs schema rights
+  const denied = await requireAccess('schema')
+  if (denied) return denied
+
   logger.info('GET /api/settings/import-source/objects')
   
   try {

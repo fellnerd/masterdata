@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 import { logger } from '@/lib/logger'
+import { requireAccess, getVisibility, entityAllowed } from '@/lib/permissions'
 
 // Types
 interface Attribute {
@@ -41,7 +42,10 @@ export async function GET(
 ) {
   const { entityId } = await params
   logger.info({ entityId }, 'GET /api/entities/[entityId]/attributes')
-  
+
+  const denied = await requireAccess('read', { entityId: parseInt(entityId) })
+  if (denied) return denied
+
   try {
     // Mock attributes
     const attributes: Attribute[] = [
@@ -73,7 +77,10 @@ export async function POST(
 ) {
   const { entityId } = await params
   logger.info({ entityId }, 'POST /api/entities/[entityId]/attributes')
-  
+
+  const denied = await requireAccess('schema', { entityId: parseInt(entityId) })
+  if (denied) return denied
+
   try {
     const body = await request.json()
     const { 
@@ -138,7 +145,10 @@ export async function PUT(
 ) {
   const { entityId } = await params
   logger.info({ entityId }, 'PUT /api/entities/[entityId]/attributes (batch)')
-  
+
+  const denied = await requireAccess('schema', { entityId: parseInt(entityId) })
+  if (denied) return denied
+
   try {
     const body = await request.json()
     const { attributes } = body // Array of { attr_id, sort_order }

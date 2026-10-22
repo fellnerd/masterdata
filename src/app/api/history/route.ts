@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { getVisibility, inListSql } from '@/lib/permissions'
 
 // Force Node.js runtime (not Edge)
 export const runtime = 'nodejs';
@@ -20,9 +21,13 @@ const MAX_ROWS = 500
 export async function GET() {
   logger.info('GET /api/history')
 
+  const scope = await getVisibility('read')
+  if (!scope.ok) return scope.response
+  const visible = inListSql(scope.visibility, 'entity_id', 'entity')
+
   try {
     const totalResult = await dbQuery<{ total: number }>(
-      `SELECT COUNT(*) AS total FROM mds_stage.staged_record`
+      `SELECT COUNT(*) AS total FROM mds_stage.staged_record WHERE ${visible}`
     )
     const total = totalResult[0]?.total || 0
 
@@ -48,6 +53,7 @@ export async function GET() {
       FROM mds_stage.staged_record sr
       INNER JOIN mds_meta.entity e ON sr.entity_id = e.id
       LEFT JOIN mds_stage.[commit] c ON sr.commit_id = c.id
+      WHERE ${inListSql(scope.visibility, 'sr.entity_id', 'entity')}
       ORDER BY sr.created_at DESC
     `)
 

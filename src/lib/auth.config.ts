@@ -82,15 +82,9 @@ export const authConfig: NextAuthConfig = {
         return false;
       }
 
-      // Admin-only routes
-      const adminRoutes = ['/settings/users'];
-      if (adminRoutes.some(route => pathname.startsWith(route))) {
-        const roles = (auth?.user as ExtendedUser | undefined)?.roles ?? [];
-        if (!roles.includes('admin')) {
-          return false;
-        }
-      }
-
+      // Authorization beyond "signed in" is not decided here: permissions come from the
+      // database (direct roles + Entra group grants) and are enforced in the API routes
+      // (lib/permissions) and the app layout's access gate. The JWT's `roles` are legacy.
       return true;
     },
   },

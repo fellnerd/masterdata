@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
-import { requireAdminForToken } from '@/lib/authz'
+import { requireTokenAccess, getTokenVisibility, entityAllowed } from '@/lib/permissions'
 import { createEntity } from '@/lib/services/entityService'
 
 export const runtime = 'nodejs'
@@ -46,6 +46,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
 
+  const scope = await getTokenVisibility(auth.userId, 'read')
+  if (!scope.ok) return scope.response
+
   try {
     const { searchParams } = new URL(request.url)
     const modelId = searchParams.get('model_id')
@@ -62,7 +65,7 @@ export async function GET(request: NextRequest) {
       params.modelCode = modelCode
     }
 
-    const entities = await dbQuery<EntityRow>(
+    const allEntities = await dbQuery<EntityRow>(
       `SELECT e.id, e.code, e.name, e.description, e.status, e.scd_type,
               e.model_id, m.code AS model_code, m.name AS model_name
        FROM mds_meta.entity e
@@ -71,6 +74,8 @@ export async function GET(request: NextRequest) {
        ORDER BY m.name, e.name`,
       params
     )
+
+    const entities = allEntities.filter(e => entityAllowed(scope.visibility, e.id))
 
     if (entities.length === 0) {
       return NextResponse.json({ data: [], total: 0 })
@@ -116,11 +121,11 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
-  const adminError = await requireAdminForToken(auth.userId)
-  if (adminError) return adminError
-
   try {
     const body = await request.json()
+    // a new entity needs the schema permission on its model (checked live)
+    const schemaDenied = await requireTokenAccess(auth.userId, 'schema', { modelId: Number(body?.model_id) })
+    if (schemaDenied) return schemaDenied
     const result = await createEntity({ ...body, created_by: `token:${auth.userId}` })
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status })

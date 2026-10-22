@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getMdsQueue } from '@/lib/queue/queue';
+import { requireAccess } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,10 @@ export interface WorkerHealthResponse {
  * Prüft ob der Worker aktiv ist und läuft
  */
 export async function GET() {
+  // job management is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   try {
     const session = await auth();
     if (!session) {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { requireAccess, getVisibility, entityAllowed } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,7 +22,10 @@ export async function GET(
 ) {
   const { entityId } = await params
   logger.info({ entityId }, 'GET /api/entities/[entityId]/import-mapping')
-  
+
+  const denied = await requireAccess('schema', { entityId: parseInt(entityId) })
+  if (denied) return denied
+
   try {
     const results = await dbQuery<ImportMapping>(
       `SELECT
@@ -77,7 +81,10 @@ export async function PUT(
 ) {
   const { entityId } = await params
   logger.info({ entityId }, 'PUT /api/entities/[entityId]/import-mapping')
-  
+
+  const denied = await requireAccess('schema', { entityId: parseInt(entityId) })
+  if (denied) return denied
+
   try {
     const body = await request.json()
     const {

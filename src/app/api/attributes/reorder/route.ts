@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { reorderAttributes } from '@/lib/services/attributeService'
+import { requireAccess } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,6 +16,9 @@ export async function PUT(request: NextRequest) {
     if (!Number.isInteger(entity_id)) {
       return NextResponse.json({ error: 'entity_id (integer) is required' }, { status: 400 })
     }
+
+    const denied = await requireAccess('schema', { entityId: entity_id })
+    if (denied) return denied
 
     const result = await reorderAttributes(entity_id, order)
     if (!result.ok) {

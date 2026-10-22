@@ -9,6 +9,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getMdsQueue } from '@/lib/queue/queue';
+import { requireAccess } from '@/lib/permissions'
+import { requireJobAccess } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,6 +60,9 @@ export async function GET(
     if (!job) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 });
     }
+
+    const jobDenied = await requireJobAccess(job.data);
+    if (jobDenied) return jobDenied;
 
     // Status bestimmen
     const state = await job.getState();
@@ -141,6 +146,10 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // job management is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   try {
     const session = await auth();
     if (!session) {
@@ -206,6 +215,10 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // job management is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   try {
     const session = await auth();
     if (!session) {

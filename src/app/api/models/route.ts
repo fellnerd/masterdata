@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { listModels, createModel } from '@/lib/services/modelService'
+import { requireAccess, getVisibility, modelAllowed, entityAllowed } from '@/lib/permissions'
 
 // Force Node.js runtime (not Edge)
 export const runtime = 'nodejs';
@@ -10,12 +11,16 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   logger.info('GET /api/models')
 
+  const scope = await getVisibility('read')
+  if (!scope.ok) return scope.response
+
   try {
     const result = await listModels()
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status })
     }
-    return NextResponse.json({ data: result.data, total: result.data.length })
+    const data = result.data.filter(m => modelAllowed(scope.visibility, m.id))
+    return NextResponse.json({ data, total: data.length })
   } catch (error) {
     logger.error({ error }, 'Failed to fetch models')
     return NextResponse.json(
@@ -28,6 +33,10 @@ export async function GET() {
 // POST /api/models - Create new model
 export async function POST(request: NextRequest) {
   logger.info('POST /api/models')
+
+  // creating a model is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
 
   try {
     const body = await request.json()

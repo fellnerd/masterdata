@@ -26,6 +26,7 @@ interface User {
   image: string | null
   status: Status
   roles: Role[]
+  groups?: { id: number; name: string | null; object_id: string }[]
   created_at: string
   last_login_at: string | null
 }
@@ -238,6 +239,17 @@ export default function UsersPage() {
     }
   }
 
+  // Filter by Entra group (groups as of the user's last sign-in)
+  const [groupFilter, setGroupFilter] = useState('all')
+  const allGroups = Array.from(
+    new Map(users.flatMap(u => u.groups ?? []).map(g => [g.id, g])).values()
+  ).sort((a, b) => (a.name ?? a.object_id).localeCompare(b.name ?? b.object_id))
+  const visibleUsers = groupFilter === 'all'
+    ? users
+    : groupFilter === 'none'
+      ? users.filter(u => (u.groups ?? []).length === 0)
+      : users.filter(u => (u.groups ?? []).some(g => String(g.id) === groupFilter))
+
   const activeUsers = users.filter(u => u.status === 'active').length
   const pendingUsers = users.filter(u => u.status === 'pending').length
 
@@ -285,6 +297,20 @@ export default function UsersPage() {
           </Callout>
         )}
 
+        {allGroups.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <span className="text-muted">Entra group</span>
+            <HTMLSelect value={groupFilter} onChange={e => setGroupFilter(e.target.value)}>
+              <option value="all">All users</option>
+              {allGroups.map(g => (
+                <option key={g.id} value={g.id}>{g.name ?? g.object_id}</option>
+              ))}
+              <option value="none">Without Entra group</option>
+            </HTMLSelect>
+            <span className="text-muted">{visibleUsers.length} of {users.length}</span>
+          </div>
+        )}
+
         {loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
             <Spinner />
@@ -297,6 +323,7 @@ export default function UsersPage() {
               <tr>
                 <th>User</th>
                 <th>Role</th>
+                <th>Entra groups</th>
                 <th>Status</th>
                 <th>Last Login</th>
                 <th>Created</th>
@@ -304,7 +331,7 @@ export default function UsersPage() {
               </tr>
             </thead>
             <tbody>
-              {users.map(user => (
+              {visibleUsers.map(user => (
                 <tr key={user.id}>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -326,6 +353,17 @@ export default function UsersPage() {
                     <Tag intent={getRoleIntent(primaryRole(user))} minimal>
                       {roles.find(r => r.value === primaryRole(user))?.label}
                     </Tag>
+                  </td>
+                  <td>
+                    {(user.groups ?? []).length > 0 ? (
+                      (user.groups ?? []).map(g => (
+                        <Tag key={g.id} minimal style={{ marginRight: 4, marginBottom: 2 }} title={g.object_id}>
+                          {g.name ?? g.object_id}
+                        </Tag>
+                      ))
+                    ) : (
+                      <span className="text-muted">—</span>
+                    )}
                   </td>
                   <td>
                     <Tag intent={getStatusIntent(user.status)} minimal>{user.status}</Tag>

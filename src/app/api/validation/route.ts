@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
+import { requireAccess } from '@/lib/permissions'
 
 // Types
 type SeverityLevel = 'error' | 'warning' | 'info'
@@ -176,6 +177,10 @@ const validationIssues: ValidationIssue[] = [
 
 // GET /api/validation - Get validation overview and metrics
 export async function GET(request: NextRequest) {
+  // needs access to the system
+  const denied = await requireAccess('read')
+  if (denied) return denied
+
   logger.info('GET /api/validation')
   
   try {
@@ -247,6 +252,10 @@ export async function GET(request: NextRequest) {
 
 // POST /api/validation - Run validation
 export async function POST(request: NextRequest) {
+  // starting a validation scan needs the write permission
+  const denied = await requireAccess('write')
+  if (denied) return denied
+
   logger.info('POST /api/validation (run)')
   
   try {

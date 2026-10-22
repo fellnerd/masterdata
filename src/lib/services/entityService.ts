@@ -385,6 +385,8 @@ export async function deleteEntity(id: number): Promise<ServiceResult<{ success:
     await dbExecute('DELETE FROM mds_stage.staged_record WHERE entity_id = @id', { id })
     await dbExecute('DELETE FROM mds_load.deployment_log WHERE entity_id = @id', { id })
     await dbExecute("DELETE FROM mds_stage.[commit] WHERE entity_id = @id", { id })
+    // permissions granted on this entity only exist for it
+    await dbExecute('DELETE FROM mds_meta.permission WHERE entity_id = @id', { id })
     await dbExecute('DELETE FROM mds_meta.entity WHERE id = @id', { id })
   } catch (error) {
     // Safety net for any FK constraint not covered by the checks above

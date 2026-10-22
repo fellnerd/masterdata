@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { listAttributes, createAttribute } from '@/lib/services/attributeService'
+import { requireAccess, getVisibility, entityAllowed } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -8,6 +9,9 @@ export const dynamic = 'force-dynamic';
 // GET /api/attributes - List all attributes
 export async function GET(request: NextRequest) {
   logger.info('GET /api/attributes')
+
+  const scope = await getVisibility('read')
+  if (!scope.ok) return scope.response
 
   try {
     const { searchParams } = new URL(request.url)
@@ -18,7 +22,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: result.error }, { status: result.status })
     }
 
-    const results = result.data
+    const results = result.data.filter(a => entityAllowed(scope.visibility, a.entity_id))
     const businessKeys = results.filter(a => a.is_business_key).length
     const references = results.filter(a => a.reference_entity_id !== null).length
     const entityCount = new Set(results.map(a => a.entity_id)).size
@@ -48,6 +52,10 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
+
+    const denied = await requireAccess('schema', { entityId: Number(body?.entity_id) })
+    if (denied) return denied
+
     const result = await createAttribute(body)
 
     if (!result.ok) {

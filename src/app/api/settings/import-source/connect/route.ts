@@ -9,6 +9,7 @@ import * as os from 'os'
 import * as crypto from 'crypto'
 import { parseDbtProjectFull } from '@/lib/dbt/config-parser'
 import * as yaml from 'js-yaml'
+import { requireAccess } from '@/lib/permissions'
 
 const execFileAsync = promisify(execFile)
 
@@ -118,6 +119,10 @@ function scanGithubWorkflows(repoRoot: string): WorkflowInfo[] {
 
 // POST /api/settings/import-source/connect - Clone repo and validate
 export async function POST() {
+  // import source settings hold credentials: global admin only
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   logger.info('POST /api/settings/import-source/connect')
 
   let sshKeyPath: string | null = null

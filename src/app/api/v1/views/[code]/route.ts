@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { requireTokenAccess, getTokenVisibility, entityAllowed, inListSql, entityIdOfRecord } from '@/lib/permissions'
 import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
@@ -45,6 +46,8 @@ export async function GET(
   if (!resolved.ok) {
     return NextResponse.json({ error: resolved.error }, { status: resolved.status })
   }
+  const denied = await requireTokenAccess(auth.userId, 'read', { entityId: resolved.entityId })
+  if (denied) return denied
 
   try {
     const { searchParams } = new URL(request.url)

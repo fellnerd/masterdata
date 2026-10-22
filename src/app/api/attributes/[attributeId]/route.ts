@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
-import { requireAdmin } from '@/lib/authz'
 import { getAttribute, updateAttribute, deleteAttribute } from '@/lib/services/attributeService'
+import { requireAccess, entityIdOfAttribute } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,6 +13,9 @@ export async function GET(
 ) {
   const { attributeId } = await params
   logger.info({ attributeId }, 'GET /api/attributes/[attributeId]')
+
+  const denied = await requireAccess('read', { entityId: (await entityIdOfAttribute(parseInt(attributeId))) ?? -1 })
+  if (denied) return denied
 
   try {
     const result = await getAttribute(parseInt(attributeId))
@@ -36,6 +39,9 @@ export async function PUT(
 ) {
   const { attributeId } = await params
   logger.info({ attributeId }, 'PUT /api/attributes/[attributeId]')
+
+  const denied = await requireAccess('schema', { entityId: (await entityIdOfAttribute(parseInt(attributeId))) ?? -1 })
+  if (denied) return denied
 
   try {
     const body = await request.json()
@@ -61,7 +67,7 @@ export async function DELETE(
   const { attributeId } = await params
   logger.info({ attributeId }, 'DELETE /api/attributes/[attributeId]')
 
-  const authError = await requireAdmin()
+  const authError = await requireAccess('schema', { entityId: (await entityIdOfAttribute(parseInt(attributeId))) ?? -1 })
   if (authError) return authError
 
   try {

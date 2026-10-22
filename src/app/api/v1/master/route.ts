@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
+import { requireTokenAccess, getTokenVisibility, entityAllowed, inListSql, entityIdOfRecord } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -13,9 +14,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
 
+  const scope = await getTokenVisibility(auth.userId, 'read')
+  if (!scope.ok) return scope.response
+
   try {
-    const entities = await dbQuery<{ code: string; name: string }>(
-      `SELECT e.code, e.name
+    const allEntities = await dbQuery<{ id: number; code: string; name: string }>(
+      `SELECT e.id, e.code, e.name
        FROM mds_meta.entity e
        WHERE EXISTS (
          SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id
@@ -24,6 +28,7 @@ export async function GET(request: NextRequest) {
        ORDER BY e.code`
     )
 
+    const entities = allEntities.filter(e => entityAllowed(scope.visibility, e.id))
     return NextResponse.json({
       data: entities.map(e => ({ code: e.code, name: e.name })),
       total: entities.length,

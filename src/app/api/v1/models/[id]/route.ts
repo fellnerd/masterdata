@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
-import { requireAdminForToken } from '@/lib/authz'
+import { requireTokenAccess, getTokenVisibility, entityAllowed, modelAllowed } from '@/lib/permissions'
 import { getModel, updateModel, deleteModel } from '@/lib/services/modelService'
 
 export const runtime = 'nodejs'
@@ -18,6 +18,8 @@ export async function GET(
   }
 
   const { id } = await params
+  const readDenied = await requireTokenAccess(auth.userId, 'read', { modelId: parseInt(id) })
+  if (readDenied) return readDenied
   try {
     const result = await getModel(parseInt(id))
     if (!result.ok) {
@@ -39,10 +41,9 @@ export async function PUT(
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
-  const adminError = await requireAdminForToken(auth.userId)
-  if (adminError) return adminError
-
   const { id } = await params
+  const schemaDenied = await requireTokenAccess(auth.userId, 'schema', { modelId: parseInt(id) })
+  if (schemaDenied) return schemaDenied
   try {
     const body = await request.json()
     const modelId = parseInt(id)
@@ -71,7 +72,7 @@ export async function DELETE(
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
-  const adminError = await requireAdminForToken(auth.userId)
+  const adminError = await requireTokenAccess(auth.userId, 'system')
   if (adminError) return adminError
 
   const { id } = await params

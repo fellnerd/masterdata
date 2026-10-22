@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
 import { addJob } from '@/lib/queue/queue'
 import { resolveEntityId } from '@/lib/services/entityService'
+import { requireTokenAccess, getTokenVisibility, entityAllowed, inListSql, entityIdOfRecord } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,6 +37,10 @@ export async function POST(
     if (!resolved.ok) {
       return NextResponse.json({ error: resolved.error }, { status: resolved.status })
     }
+
+    // an import replaces the entity's staged records: needs the write permission on it
+    const denied = await requireTokenAccess(auth.userId, 'write', { entityId: resolved.data })
+    if (denied) return denied
 
     const entities = await dbQuery<{ id: number; code: string; import_source_object: string | null }>(
       'SELECT id, code, import_source_object FROM mds_meta.entity WHERE id = @id',

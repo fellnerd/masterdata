@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { requireAccess, getVisibility, inListSql, entityIdOfCommit } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,6 +24,9 @@ export async function GET(
 ) {
   const { commitId: commitIdStr } = await params
   const commitId = parseInt(commitIdStr)
+
+  const denied = await requireAccess('read', { entityId: (await entityIdOfCommit(commitId)) ?? -1 })
+  if (denied) return denied
 
   const { searchParams } = new URL(request.url)
   // Commits can hold thousands of records (seen: 2995) - rendering all of

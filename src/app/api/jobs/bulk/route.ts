@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getMdsQueue } from '@/lib/queue/queue';
+import { requireAccess } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,10 @@ interface BulkResult {
  * Führt eine Aktion auf mehreren Jobs aus
  */
 export async function POST(request: NextRequest) {
+  // job management is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   try {
     const session = await auth();
     if (!session) {

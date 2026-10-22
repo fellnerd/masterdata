@@ -3,6 +3,7 @@ import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { addJob } from '@/lib/queue/queue'
 import { findDuplicateBusinessKeys, describeDuplicateBusinessKeys } from '@/lib/commitValidation'
+import { requireAccess, getVisibility, inListSql, entityIdOfCommit } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,7 +31,10 @@ export interface Commit {
 // GET /api/commits - List commits
 export async function GET(request: NextRequest) {
   logger.info('GET /api/commits')
-  
+
+  const scope = await getVisibility('read')
+  if (!scope.ok) return scope.response
+
   try {
     const { searchParams } = new URL(request.url)
     const entityId = searchParams.get('entity_id')
@@ -57,7 +61,7 @@ export async function GET(request: NextRequest) {
         c.deployed_by
       FROM [mds_stage].[commit] c
       INNER JOIN [mds_meta].[entity] e ON e.id = c.entity_id
-      WHERE 1=1
+      WHERE ${inListSql(scope.visibility, 'c.entity_id', 'entity')}
     `
     
     const params: Record<string, unknown> = {}
@@ -122,6 +126,9 @@ export async function POST(request: NextRequest) {
       created_by = 'admin'
     } = body
     
+    const denied = await requireAccess('write', { entityId: Number(entity_id) })
+    if (denied) return denied
+
     if (!entity_id) {
       return NextResponse.json(
         { error: 'entity_id is required' },
@@ -351,6 +358,10 @@ export async function PATCH(request: NextRequest) {
       user = 'admin'
     } = body
     
+    // approving / rejecting / deploying a commit needs the approve permission on its entity
+    const patchDenied = await requireAccess('approve', { entityId: (await entityIdOfCommit(Number(id))) ?? -1 })
+    if (patchDenied) return patchDenied
+
     if (!id || !action) {
       return NextResponse.json(
         { error: 'id and action are required' },

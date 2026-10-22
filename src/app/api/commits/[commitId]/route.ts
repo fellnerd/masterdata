@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { requireAccess, getVisibility, inListSql, entityIdOfCommit } from '@/lib/permissions'
 
 // Force Node.js runtime (not Edge)
 export const runtime = 'nodejs';
@@ -21,6 +22,9 @@ export async function GET(
 ) {
   const { commitId } = await params
   logger.info({ commitId }, 'GET /api/commits/[commitId]')
+
+  const denied = await requireAccess('read', { entityId: (await entityIdOfCommit(parseInt(commitId))) ?? -1 })
+  if (denied) return denied
   
   try {
     // Mock commit detail with row changes
@@ -87,6 +91,9 @@ export async function PUT(
 ) {
   const { commitId } = await params
   logger.info({ commitId }, 'PUT /api/commits/[commitId]')
+
+  const denied = await requireAccess('approve', { entityId: (await entityIdOfCommit(parseInt(commitId))) ?? -1 })
+  if (denied) return denied
   
   try {
     const body = await request.json() as CommitAction
@@ -169,6 +176,9 @@ export async function DELETE(
   const { commitId } = await params
   logger.info({ commitId }, 'DELETE /api/commits/[commitId]')
 
+  const denied = await requireAccess('write', { entityId: (await entityIdOfCommit(parseInt(commitId))) ?? -1 })
+  if (denied) return denied
+
   const id = parseInt(commitId)
   if (!Number.isInteger(id)) {
     return NextResponse.json({ error: 'Invalid commit id' }, { status: 400 })
@@ -246,6 +256,9 @@ export async function PATCH(
 ) {
   const { commitId } = await params
   logger.info({ commitId }, 'PATCH /api/commits/[commitId]')
+
+  const denied = await requireAccess('approve', { entityId: (await entityIdOfCommit(parseInt(commitId))) ?? -1 })
+  if (denied) return denied
   
   try {
     const body = await request.json()

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { requireAccess, requireSelfEmailOrSystem } from '@/lib/permissions'
 
 export interface ApiUser {
   id: number
@@ -18,6 +19,11 @@ const VALID_ROLES = ['viewer', 'editor', 'approver', 'admin']
 // GET /api/users - List all users with their roles
 export async function GET(request: NextRequest) {
   logger.info('GET /api/users')
+
+  // anyone may read their own record (profile page); the user list is for global admins
+  const emailParam = new URL(request.url).searchParams.get('email')
+  const denied = await requireSelfEmailOrSystem(emailParam)
+  if (denied) return denied
 
   try {
     const { searchParams } = new URL(request.url)
@@ -50,8 +56,24 @@ export async function GET(request: NextRequest) {
 
     const results = await dbQuery<ApiUser>(sql, params)
 
+    // Entra groups each user had at their last sign-in (snapshot), with the group's
+    // permissions count so the UI can filter by group and flag unmapped ones.
+    const memberships = await dbQuery<{ user_id: number; id: number; name: string | null; object_id: string }>(
+      `SELECT ug.user_id, g.id, g.display_name AS name, g.object_id
+       FROM mds_meta.user_entra_group ug
+       JOIN mds_meta.entra_group g ON g.id = ug.entra_group_id
+       WHERE g.kind = 'group'
+       ORDER BY g.display_name`
+    )
+    const groupsByUser = new Map<number, { id: number; name: string | null; object_id: string }[]>()
+    for (const m of memberships) {
+      const list = groupsByUser.get(m.user_id) ?? []
+      list.push({ id: m.id, name: m.name, object_id: m.object_id })
+      groupsByUser.set(m.user_id, list)
+    }
+
     return NextResponse.json({
-      data: results.map(r => ({ ...r, roles: r.roles ? r.roles.split(',') : [] })),
+      data: results.map(r => ({ ...r, roles: r.roles ? r.roles.split(',') : [], groups: groupsByUser.get(r.id) ?? [] })),
       total: results.length,
     })
   } catch (error) {
@@ -65,6 +87,10 @@ export async function GET(request: NextRequest) {
 
 // POST /api/users - Invite / pre-provision a user with a role (before they've ever logged in)
 export async function POST(request: NextRequest) {
+  // managing users is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   logger.info('POST /api/users')
 
   try {
@@ -145,6 +171,10 @@ export async function POST(request: NextRequest) {
 
 // PATCH /api/users - Update a user's role and/or status
 export async function PATCH(request: NextRequest) {
+  // managing users is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   logger.info('PATCH /api/users')
 
   try {
@@ -204,6 +234,10 @@ export async function PATCH(request: NextRequest) {
 
 // DELETE /api/users - Delete a user (cascades to their roles and API tokens)
 export async function DELETE(request: NextRequest) {
+  // managing users is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   logger.info('DELETE /api/users')
 
   try {

@@ -9,6 +9,7 @@ import { auth } from '@/lib/auth';
 import { getMdsQueue } from '@/lib/queue/queue';
 import { QueueEvents } from 'bullmq';
 import { getRedisConfig } from '@/lib/queue/config';
+import { requireJobAccess } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,6 +48,9 @@ export async function GET(
   if (!job) {
     return new Response('Job not found', { status: 404 });
   }
+
+  const jobDenied = await requireJobAccess(job.data);
+  if (jobDenied) return jobDenied;
 
   const encoder = new TextEncoder();
   

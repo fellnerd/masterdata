@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
-import { requireAdminForToken } from '@/lib/authz'
+import { requireTokenAccess, getTokenVisibility, entityAllowed, modelAllowed, entityIdOfAttribute } from '@/lib/permissions'
 import { getAttribute, updateAttribute, deleteAttribute } from '@/lib/services/attributeService'
 
 export const runtime = 'nodejs'
@@ -18,6 +18,8 @@ export async function GET(
   }
 
   const { id } = await params
+  const readDenied = await requireTokenAccess(auth.userId, 'read', { entityId: (await entityIdOfAttribute(parseInt(id))) ?? -1 })
+  if (readDenied) return readDenied
   try {
     const result = await getAttribute(parseInt(id))
     if (!result.ok) {
@@ -39,10 +41,9 @@ export async function PUT(
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
-  const adminError = await requireAdminForToken(auth.userId)
-  if (adminError) return adminError
-
   const { id } = await params
+  const schemaDenied = await requireTokenAccess(auth.userId, 'schema', { entityId: (await entityIdOfAttribute(parseInt(id))) ?? -1 })
+  if (schemaDenied) return schemaDenied
   try {
     const body = await request.json()
     const attributeId = parseInt(id)
@@ -71,10 +72,9 @@ export async function DELETE(
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
-  const adminError = await requireAdminForToken(auth.userId)
-  if (adminError) return adminError
-
   const { id } = await params
+  const schemaDenied = await requireTokenAccess(auth.userId, 'schema', { entityId: (await entityIdOfAttribute(parseInt(id))) ?? -1 })
+  if (schemaDenied) return schemaDenied
   try {
     const result = await deleteAttribute(parseInt(id))
     if (!result.ok) {

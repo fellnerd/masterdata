@@ -3,6 +3,7 @@ import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { v4 as uuidv4 } from 'uuid'
 import { addJob } from '@/lib/queue/queue'
+import { requireAccess, getVisibility, inListSql, entityIdOfCommit } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,6 +57,14 @@ export async function POST(request: NextRequest) {
       queue_only = false // If true, job is created but paused (won't start automatically)
     } = body
     
+    // deploying data needs the approve permission on every commit's entity
+    if (Array.isArray(commit_ids)) {
+      for (const commitId of commit_ids) {
+        const denied = await requireAccess('approve', { entityId: (await entityIdOfCommit(Number(commitId))) ?? -1 })
+        if (denied) return denied
+      }
+    }
+
     if (!commit_ids || !Array.isArray(commit_ids) || commit_ids.length === 0) {
       return NextResponse.json(
         { error: 'commit_ids array is required' },
@@ -447,7 +456,10 @@ function generateLoadTableDDL(entity: Entity, attributes: Attribute[]): string {
 // GET /api/deploy - Get deployment history
 export async function GET(request: NextRequest) {
   logger.info('GET /api/deploy')
-  
+
+  const scope = await getVisibility('read')
+  if (!scope.ok) return scope.response
+
   try {
     const { searchParams } = new URL(request.url)
     const limit = parseInt(searchParams.get('limit') || '20')
@@ -464,6 +476,7 @@ export async function GET(request: NextRequest) {
     }>(
       `SELECT TOP (@limit) *
        FROM mds_load.deployment_log
+       WHERE ${inListSql(scope.visibility, 'entity_id', 'entity')}
        ORDER BY started_at DESC`,
       { limit }
     )

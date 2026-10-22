@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { deployViews } from '@/lib/services/viewDeployService'
+import { requireAccess, getVisibility, entityAllowed, entityIdOfView } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -28,6 +29,11 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { view_ids, user = 'admin' } = body
     const stream = new URL(request.url).searchParams.get('stream') === '1'
+
+    for (const viewId of Array.isArray(view_ids) ? view_ids : []) {
+      const denied = await requireAccess('schema', { entityId: (await entityIdOfView(Number(viewId))) ?? -1 })
+      if (denied) return denied
+    }
 
     if (!view_ids || !Array.isArray(view_ids) || view_ids.length === 0) {
       return NextResponse.json(
@@ -94,7 +100,10 @@ export async function POST(request: NextRequest) {
 // GET /api/views/deploy - Get view deployment status
 export async function GET(request: NextRequest) {
   logger.info('GET /api/views/deploy')
-  
+
+  const scope = await getVisibility('schema')
+  if (!scope.ok) return scope.response
+
   try {
     const { searchParams } = new URL(request.url)
     const entityId = searchParams.get('entity_id')
@@ -102,6 +111,7 @@ export async function GET(request: NextRequest) {
     let query = `
       SELECT 
         v.id,
+        v.entity_id,
         v.code,
         v.name,
         v.view_type,
@@ -126,8 +136,9 @@ export async function GET(request: NextRequest) {
     
     query += ' ORDER BY e.name, v.name'
     
-    const views = await dbQuery(query, params)
-    
+    const all = await dbQuery<{ entity_id: number }>(query, params)
+    const views = all.filter(v => entityAllowed(scope.visibility, v.entity_id))
+
     return NextResponse.json({
       views,
       count: views.length

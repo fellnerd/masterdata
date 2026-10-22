@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
 import { validateReferenceAttributes } from '@/lib/validateReferences'
 import { getBusinessKeyAttributeCodes, deriveBusinessKey, findRecordByBusinessKey, duplicateBusinessKeyMessage } from '@/lib/businessKey'
+import { requireTokenAccess, getTokenVisibility, entityAllowed, inListSql, entityIdOfRecord } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -29,6 +30,8 @@ export async function GET(
   }
 
   const { id } = await params
+  const denied = await requireTokenAccess(auth.userId, 'read', { entityId: (await entityIdOfRecord(parseInt(id))) ?? -1 })
+  if (denied) return denied
 
   try {
     const records = await dbQuery<StagedRecord & { entity_code: string; entity_name: string }>(
@@ -62,6 +65,8 @@ export async function PUT(
   }
 
   const { id } = await params
+  const denied = await requireTokenAccess(auth.userId, 'write', { entityId: (await entityIdOfRecord(parseInt(id))) ?? -1 })
+  if (denied) return denied
 
   try {
     const body = await request.json()
@@ -151,6 +156,8 @@ export async function DELETE(
   }
 
   const { id } = await params
+  const denied = await requireTokenAccess(auth.userId, 'write', { entityId: (await entityIdOfRecord(parseInt(id))) ?? -1 })
+  if (denied) return denied
 
   try {
     const currentRecords = await dbQuery<StagedRecord>(

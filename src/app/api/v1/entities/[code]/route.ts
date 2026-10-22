@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
-import { requireAdminForToken } from '@/lib/authz'
+import { requireTokenAccess, getTokenVisibility, entityAllowed } from '@/lib/permissions'
 import { resolveEntityId, getEntity, updateEntity, deleteEntity } from '@/lib/services/entityService'
 
 export const runtime = 'nodejs'
@@ -28,6 +28,9 @@ export async function GET(
       return NextResponse.json({ error: resolved.error }, { status: resolved.status })
     }
 
+    const denied = await requireTokenAccess(auth.userId, 'read', { entityId: resolved.data })
+    if (denied) return denied
+
     const result = await getEntity(resolved.data)
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status })
@@ -48,9 +51,6 @@ export async function PUT(
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
-  const adminError = await requireAdminForToken(auth.userId)
-  if (adminError) return adminError
-
   const { code } = await params
   try {
     const { searchParams } = new URL(request.url)
@@ -58,6 +58,9 @@ export async function PUT(
     if (!resolved.ok) {
       return NextResponse.json({ error: resolved.error }, { status: resolved.status })
     }
+
+    const denied = await requireTokenAccess(auth.userId, 'schema', { entityId: resolved.data })
+    if (denied) return denied
 
     const body = await request.json()
     const result = await updateEntity(resolved.data, { ...body, updated_by: `token:${auth.userId}` })
@@ -86,9 +89,6 @@ export async function DELETE(
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
-  const adminError = await requireAdminForToken(auth.userId)
-  if (adminError) return adminError
-
   const { code } = await params
   try {
     const { searchParams } = new URL(request.url)
@@ -96,6 +96,9 @@ export async function DELETE(
     if (!resolved.ok) {
       return NextResponse.json({ error: resolved.error }, { status: resolved.status })
     }
+
+    const denied = await requireTokenAccess(auth.userId, 'schema', { entityId: resolved.data })
+    if (denied) return denied
 
     const result = await deleteEntity(resolved.data)
     if (!result.ok) {

@@ -158,6 +158,8 @@ export async function deleteModel(id: number): Promise<ServiceResult<{ success: 
   }
 
   try {
+    // permissions granted on this model only exist for it
+    await dbExecute('DELETE FROM mds_meta.permission WHERE model_id = @id', { id })
     await dbExecute('DELETE FROM mds_meta.model WHERE id = @id', { id })
   } catch (error) {
     // Safety net for any FK constraint not covered by the checks above.

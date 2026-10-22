@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { requireAccess, getVisibility, entityAllowed, entityIdOfView } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -39,7 +40,10 @@ interface EntityView {
 // GET /api/views - List all views or views for specific entity
 export async function GET(request: NextRequest) {
   logger.info('GET /api/views')
-  
+
+  const scope = await getVisibility('read')
+  if (!scope.ok) return scope.response
+
   try {
     const { searchParams } = new URL(request.url)
     const entityId = searchParams.get('entity_id')
@@ -77,8 +81,9 @@ export async function GET(request: NextRequest) {
     
     query += ' ORDER BY e.name, v.is_default DESC, v.name'
     
-    const views = await dbQuery<EntityView>(query, params)
-    
+    const all = await dbQuery<EntityView>(query, params)
+    const views = all.filter(v => entityAllowed(scope.visibility, v.entity_id))
+
     return NextResponse.json({
       views,
       count: views.length
@@ -112,6 +117,9 @@ export async function POST(request: NextRequest) {
     } = body
     
     // Validation
+    const createDenied = await requireAccess('schema', { entityId: Number(entity_id) })
+    if (createDenied) return createDenied
+
     if (!entity_id || !code || !name) {
       return NextResponse.json(
         { error: 'entity_id, code, and name are required' },
@@ -206,6 +214,10 @@ export async function PATCH(request: NextRequest) {
   
   try {
     const body = await request.json()
+
+    const patchDenied = await requireAccess('schema', { entityId: (await entityIdOfView(Number(body?.id))) ?? -1 })
+    if (patchDenied) return patchDenied
+
     const {
       id,
       name,
@@ -322,7 +334,10 @@ export async function DELETE(request: NextRequest) {
         { status: 400 }
       )
     }
-    
+
+    const deleteDenied = await requireAccess('schema', { entityId: (await entityIdOfView(parseInt(id))) ?? -1 })
+    if (deleteDenied) return deleteDenied
+
     // Get view to check if deployed
     const views = await dbQuery<EntityView>(
       'SELECT * FROM mds_meta.entity_view WHERE id = @id',

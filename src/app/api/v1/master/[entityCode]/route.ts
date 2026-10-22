@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { requireTokenAccess, getTokenVisibility, entityAllowed, inListSql, entityIdOfRecord } from '@/lib/permissions'
 import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
@@ -73,6 +74,8 @@ export async function GET(
   if (!resolved.ok) {
     return NextResponse.json({ error: resolved.error }, { status: resolved.status })
   }
+  const denied = await requireTokenAccess(auth.userId, 'read', { entityId: resolved.entity.id })
+  if (denied) return denied
 
   try {
     const unknownParam = findUnknownQueryParam(searchParams, ['business_key', 'history', 'page', 'pageSize', 'model_code', ...SHAPING_PARAMS])

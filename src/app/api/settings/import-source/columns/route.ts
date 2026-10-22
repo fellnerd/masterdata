@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbQuery } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { requireAccess } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -14,6 +15,10 @@ export const dynamic = 'force-dynamic'
 // the static SQL-file parser used to list available objects (config-parser.ts),
 // which is a best-effort guess and can still miss or mis-name a column.
 export async function GET(request: NextRequest) {
+  // browsing the source for the import mapping needs schema rights
+  const denied = await requireAccess('schema')
+  if (denied) return denied
+
   const { searchParams } = new URL(request.url)
   const object = searchParams.get('object')
   if (!object) {

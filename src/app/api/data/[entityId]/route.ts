@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { logger } from '@/lib/logger'
 import { query, execute } from '@/lib/db'
 import { parsePagination } from '@/lib/pagination'
+import { requireAccess } from '@/lib/permissions'
 
 // Types
 interface DataRow {
@@ -34,6 +35,9 @@ export async function GET(
   { params }: { params: Promise<{ entityId: string }> }
 ) {
   const { entityId } = await params
+
+  const denied = await requireAccess('read', { entityId: parseInt(entityId) })
+  if (denied) return denied
   const entityIdNum = parseInt(entityId)
   logger.info({ entityId: entityIdNum }, 'GET /api/data/[entityId]')
   
@@ -124,6 +128,9 @@ export async function POST(
   { params }: { params: Promise<{ entityId: string }> }
 ) {
   const { entityId } = await params
+
+  const denied = await requireAccess('write', { entityId: parseInt(entityId) })
+  if (denied) return denied
   const entityIdNum = parseInt(entityId)
   logger.info({ entityId: entityIdNum }, 'POST /api/data/[entityId]')
   
@@ -178,6 +185,9 @@ export async function PUT(
   { params }: { params: Promise<{ entityId: string }> }
 ) {
   const { entityId } = await params
+
+  const denied = await requireAccess('write', { entityId: parseInt(entityId) })
+  if (denied) return denied
   const entityIdNum = parseInt(entityId)
   logger.info({ entityId: entityIdNum }, 'PUT /api/data/[entityId] (batch)')
   
@@ -231,6 +241,9 @@ export async function DELETE(
   { params }: { params: Promise<{ entityId: string }> }
 ) {
   const { entityId } = await params
+
+  const denied = await requireAccess('write', { entityId: parseInt(entityId) })
+  if (denied) return denied
   const entityIdNum = parseInt(entityId)
   logger.info({ entityId: entityIdNum }, 'DELETE /api/data/[entityId]')
   

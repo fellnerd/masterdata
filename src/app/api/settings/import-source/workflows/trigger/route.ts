@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger'
 import { parseGithubRepo } from '@/lib/github'
 import { addJob } from '@/lib/queue/queue'
 import { auth } from '@/lib/auth'
+import { requireAccess } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -18,6 +19,10 @@ interface ImportSource {
 // Requires a GitHub API token with `actions:write` (a read-only SSH deploy key
 // cannot do this - it only grants git clone/fetch, not GitHub REST API access).
 export async function POST(request: NextRequest) {
+  // triggers a GitHub workflow: global admin only
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   logger.info('POST /api/settings/import-source/workflows/trigger')
 
   try {

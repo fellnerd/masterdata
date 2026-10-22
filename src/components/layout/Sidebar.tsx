@@ -4,12 +4,15 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Icon, Tag, Button, IconName } from '@blueprintjs/core'
 import { useTheme } from '@/lib/theme-provider'
+import { useAccess } from '@/components/providers/AccessProvider'
 
 interface NavItem {
   icon: IconName
   label: string
   href: string
   badge?: number
+  /** Hidden unless the user can do this somewhere (the server enforces it regardless). */
+  needs?: 'write' | 'approve' | 'schema' | 'system' | 'approveOrSchema'
 }
 
 interface NavSection {
@@ -45,16 +48,17 @@ const navigation: NavSection[] = [
   {
     title: 'Operations',
     items: [
-      { icon: 'play', label: 'Deploy', href: '/deploy' },
-      { icon: 'tick-circle', label: 'Validation', href: '/validation' },
-      { icon: 'console', label: 'Jobs', href: '/jobs' },
+      { icon: 'play', label: 'Deploy', href: '/deploy', needs: 'approveOrSchema' },
+      { icon: 'tick-circle', label: 'Validation', href: '/validation', needs: 'write' },
+      { icon: 'console', label: 'Jobs', href: '/jobs', needs: 'system' },
     ]
   },
   {
     title: 'Settings',
     items: [
-      { icon: 'people', label: 'Users', href: '/settings/users' },
-      { icon: 'cog', label: 'Configuration', href: '/settings/config' },
+      { icon: 'people', label: 'Users', href: '/settings/users', needs: 'system' },
+      { icon: 'shield', label: 'Permissions', href: '/settings/permissions', needs: 'system' },
+      { icon: 'cog', label: 'Configuration', href: '/settings/config', needs: 'system' },
     ]
   }
 ]
@@ -62,6 +66,12 @@ const navigation: NavSection[] = [
 export function Sidebar() {
   const pathname = usePathname()
   const { theme, toggleTheme, mounted } = useTheme()
+  const access = useAccess()
+  const visible = (item: NavItem) => {
+    if (!item.needs) return true
+    const c = access.capabilities
+    return item.needs === 'approveOrSchema' ? c.approve || c.schema : c[item.needs]
+  }
 
   // Determine icon and text - use consistent defaults before mount to avoid hydration mismatch
   const themeIcon = mounted ? (theme === 'dark' ? 'flash' : 'moon') : 'moon'
@@ -75,7 +85,10 @@ export function Sidebar() {
       </div>
       
       <nav className="sidebar-nav">
-        {navigation.map((section) => (
+        {navigation
+          .map((section) => ({ ...section, items: section.items.filter(visible) }))
+          .filter((section) => section.items.length > 0)
+          .map((section) => (
           <div key={section.title} className="nav-section">
             <div className="nav-section-title">{section.title}</div>
             {section.items.map((item) => (

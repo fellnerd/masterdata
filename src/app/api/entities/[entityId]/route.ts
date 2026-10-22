@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
-import { requireAdmin } from '@/lib/authz'
 import { getEntity, updateEntity, deleteEntity } from '@/lib/services/entityService'
+import { requireAccess, getVisibility, modelAllowed, entityAllowed } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,6 +13,9 @@ export async function GET(
 ) {
   const { entityId } = await params
   logger.info({ entityId }, 'GET /api/entities/[entityId]')
+
+  const denied = await requireAccess('read', { entityId: parseInt(entityId) })
+  if (denied) return denied
 
   try {
     const result = await getEntity(parseInt(entityId))
@@ -36,6 +39,9 @@ export async function PUT(
 ) {
   const { entityId } = await params
   logger.info({ entityId }, 'PUT /api/entities/[entityId]')
+
+  const denied = await requireAccess('schema', { entityId: parseInt(entityId) })
+  if (denied) return denied
 
   try {
     const body = await request.json()
@@ -65,7 +71,7 @@ export async function DELETE(
   const { entityId } = await params
   logger.info({ entityId }, 'DELETE /api/entities/[entityId]')
 
-  const authError = await requireAdmin()
+  const authError = await requireAccess('schema', { entityId: parseInt(entityId) })
   if (authError) return authError
 
   try {

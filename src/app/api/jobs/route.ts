@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { addJob, getQueueStats, getRecentJobs, cancelJob } from '@/lib/queue';
 import type { JobType } from '@/lib/queue';
+import { requireAccess } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,6 +20,10 @@ export const dynamic = 'force-dynamic';
  * Holt Jobs mit Statistiken und Liste
  */
 export async function GET(request: NextRequest) {
+  // job management is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   try {
     const session = await auth();
     if (!session) {
@@ -72,6 +77,10 @@ export async function GET(request: NextRequest) {
  * Erstellt einen neuen Job
  */
 export async function POST(request: NextRequest) {
+  // job management is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   try {
     const session = await auth();
     if (!session) {
@@ -121,6 +130,10 @@ export async function POST(request: NextRequest) {
  * Bricht einen Job ab
  */
 export async function DELETE(request: NextRequest) {
+  // job management is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   try {
     const session = await auth();
     if (!session) {

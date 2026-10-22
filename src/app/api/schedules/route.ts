@@ -6,6 +6,7 @@ import {
   ScheduleOptions 
 } from '@/lib/queue/schedule'
 import { JobType } from '@/lib/queue/config'
+import { requireAccess } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -14,6 +15,10 @@ export const dynamic = 'force-dynamic'
  * GET /api/schedules - List all scheduled jobs
  */
 export async function GET() {
+  // job management is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   try {
     const schedules = await getScheduledJobs()
     
@@ -40,6 +45,10 @@ export async function GET() {
  * - params?: Record<string, unknown>
  */
 export async function POST(request: NextRequest) {
+  // job management is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   try {
     const body = await request.json()
     const { type, target, schedule, params } = body as {
@@ -98,6 +107,10 @@ export async function POST(request: NextRequest) {
  * DELETE /api/schedules?key=<key> - Remove a scheduled job
  */
 export async function DELETE(request: NextRequest) {
+  // job management is a system-level action (global admin)
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   try {
     const key = request.nextUrl.searchParams.get('key')
     

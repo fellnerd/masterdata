@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
-import { requireAdmin } from '@/lib/authz'
 import { getModel, updateModel, deleteModel } from '@/lib/services/modelService'
+import { requireAccess, getVisibility, modelAllowed, entityAllowed } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,6 +13,12 @@ export async function GET(
 ) {
   const { modelId } = await params
   logger.info({ modelId }, 'GET /api/models/[modelId]')
+
+  const scope = await getVisibility('read')
+  if (!scope.ok) return scope.response
+  if (!modelAllowed(scope.visibility, parseInt(modelId))) {
+    return NextResponse.json({ error: 'Forbidden: no access to this model' }, { status: 403 })
+  }
 
   try {
     const result = await getModel(parseInt(modelId))
@@ -36,6 +42,9 @@ export async function PUT(
 ) {
   const { modelId } = await params
   logger.info({ modelId }, 'PUT /api/models/[modelId]')
+
+  const denied = await requireAccess('schema', { modelId: parseInt(modelId) })
+  if (denied) return denied
 
   try {
     const body = await request.json()
@@ -61,7 +70,7 @@ export async function DELETE(
   const { modelId } = await params
   logger.info({ modelId }, 'DELETE /api/models/[modelId]')
 
-  const authError = await requireAdmin()
+  const authError = await requireAccess('system')
   if (authError) return authError
 
   try {

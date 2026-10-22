@@ -5,6 +5,7 @@ import { validateReferenceAttributes } from '@/lib/validateReferences'
 import { buildRecordFilters } from '@/lib/attributeFilters'
 import { parsePagination } from '@/lib/pagination'
 import { getBusinessKeyAttributeCodes, deriveBusinessKey, findRecordByBusinessKey, duplicateBusinessKeyMessage } from '@/lib/businessKey'
+import { requireAccess, getVisibility, inListSql, entityIdOfRecord } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,7 +30,10 @@ export interface StagedRecord {
 // GET /api/records - List staged records
 export async function GET(request: NextRequest) {
   logger.info('GET /api/records')
-  
+
+  const scope = await getVisibility('read')
+  if (!scope.ok) return scope.response
+
   try {
     const { searchParams } = new URL(request.url)
     // No upper cap here (unlike the v1 API) - this route is only called by
@@ -46,7 +50,9 @@ export async function GET(request: NextRequest) {
     if (!filterResult.ok) {
       return NextResponse.json({ error: filterResult.error }, { status: filterResult.status })
     }
-    const { whereClause, params } = filterResult
+    // only records of entities the user may read
+    const whereClause = `${filterResult.whereClause} AND ${inListSql(scope.visibility, 'r.entity_id', 'entity')}`
+    const { params } = filterResult
 
     // Get total count for pagination
     const countSql = `
@@ -144,6 +150,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    const denied = await requireAccess('write', { entityId: Number(entity_id) })
+    if (denied) return denied
     
     // Check if entity exists and get business key attribute
     const entity = await dbQuery<{ id: number; code: string }>(

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { randomBytes, createHash } from 'crypto'
 import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
+import { requireSelfOrSystem, principalFromUserId, loadGrants } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 
@@ -47,6 +48,10 @@ export async function GET(
   { params }: { params: Promise<{ userId: string }> }
 ) {
   const { userId } = await params
+
+  // own tokens, or any user's tokens as global admin
+  const denied = await requireSelfOrSystem(parseInt(userId))
+  if (denied) return denied
   logger.info({ userId }, 'GET /api/users/[userId]/tokens')
 
   try {
@@ -77,6 +82,10 @@ export async function POST(
   { params }: { params: Promise<{ userId: string }> }
 ) {
   const { userId } = await params
+
+  // own tokens, or any user's tokens as global admin
+  const denied = await requireSelfOrSystem(parseInt(userId))
+  if (denied) return denied
   logger.info({ userId }, 'POST /api/users/[userId]/tokens')
 
   try {
@@ -93,11 +102,12 @@ export async function POST(
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
 
-    const roleRows = await dbQuery<{ role: string }>(
-      'SELECT DISTINCT role FROM mds_meta.user_role WHERE user_id = @userId',
-      { userId: userIdNum }
-    )
-    const scopes = scopesForRoles(roleRows.map(r => r.role))
+    // roles from every source: direct, per-model, entity-level and via Entra groups
+    // (groups as of the user's last sign-in). The scopes are only the outer limit -
+    // what the token may touch is decided live per model/entity (see lib/permissions).
+    const principal = await principalFromUserId(userIdNum)
+    const grants = principal ? await loadGrants(principal) : []
+    const scopes = scopesForRoles(grants.map(g => g.role))
 
     // mds_<32 random bytes as base64url> - shown to the caller exactly once
     const secret = randomBytes(32).toString('base64url')
@@ -144,6 +154,10 @@ export async function DELETE(
   { params }: { params: Promise<{ userId: string }> }
 ) {
   const { userId } = await params
+
+  // own tokens, or any user's tokens as global admin
+  const denied = await requireSelfOrSystem(parseInt(userId))
+  if (denied) return denied
   logger.info({ userId }, 'DELETE /api/users/[userId]/tokens')
 
   try {

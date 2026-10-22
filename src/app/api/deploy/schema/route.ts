@@ -3,6 +3,7 @@ import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { getMdsQueue } from '@/lib/queue/queue'
 import { JOB_TYPE_OPTIONS, MdsJobData } from '@/lib/queue/config'
+import { requireAccessOnAll, getVisibility, entityAllowed } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,7 +28,10 @@ interface SchemaDeployment {
 // Supports multiple statuses via comma-separated list: ?status=pending,queued,failed
 export async function GET(request: NextRequest) {
   logger.info('GET /api/deploy/schema')
-  
+
+  const scope = await getVisibility('schema')
+  if (!scope.ok) return scope.response
+
   try {
     const { searchParams } = new URL(request.url)
     const statusParam = searchParams.get('status') || 'pending'
@@ -61,9 +65,10 @@ export async function GET(request: NextRequest) {
       statusParams
     )
     
+    const data = results.filter(r => entityAllowed(scope.visibility, r.entity_id))
     return NextResponse.json({
-      data: results,
-      total: results.length
+      data,
+      total: data.length
     })
   } catch (error) {
     logger.error({ error }, 'Failed to fetch schema deployments')
@@ -88,6 +93,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    const denied = await requireAccessOnAll('schema', entity_ids.map(Number))
+    if (denied) return denied
 
     // Fetch entity codes for dbt model selection
     const entities = await dbQuery<{ id: number; code: string }>(
@@ -281,6 +289,9 @@ export async function DELETE(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    const denied = await requireAccessOnAll('schema', entity_ids.map(Number))
+    if (denied) return denied
     
     // Reset status to pending for queued/failed entities
     const placeholders = entity_ids.map((_: number, i: number) => `@id${i}`).join(', ')

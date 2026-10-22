@@ -3,6 +3,7 @@ import { dbQuery, dbExecute } from '@/lib/db-server'
 import { logger } from '@/lib/logger'
 import { validateReferenceAttributes } from '@/lib/validateReferences'
 import { getBusinessKeyAttributeCodes, deriveBusinessKey, findRecordByBusinessKey, duplicateBusinessKeyMessage } from '@/lib/businessKey'
+import { requireAccess, getVisibility, inListSql, entityIdOfRecord } from '@/lib/permissions'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,7 +25,10 @@ export async function GET(
 ) {
   const { recordId } = await params
   logger.info({ recordId }, 'GET /api/records/[recordId]')
-  
+
+  const denied = await requireAccess('read', { entityId: (await entityIdOfRecord(parseInt(recordId))) ?? -1 })
+  if (denied) return denied
+
   try {
     const records = await dbQuery<StagedRecord>(
       `SELECT r.*, e.code AS entity_code, e.name AS entity_name
@@ -62,7 +66,10 @@ export async function PUT(
 ) {
   const { recordId } = await params
   logger.info({ recordId }, 'PUT /api/records/[recordId]')
-  
+
+  const denied = await requireAccess('write', { entityId: (await entityIdOfRecord(parseInt(recordId))) ?? -1 })
+  if (denied) return denied
+
   try {
     const body = await request.json()
     const { data, operation } = body
@@ -177,7 +184,10 @@ export async function DELETE(
 ) {
   const { recordId } = await params
   logger.info({ recordId }, 'DELETE /api/records/[recordId]')
-  
+
+  const denied = await requireAccess('write', { entityId: (await entityIdOfRecord(parseInt(recordId))) ?? -1 })
+  if (denied) return denied
+
   try {
     // Get current record with entity info
     const currentRecords = await dbQuery<StagedRecord & { scd_type: string }>(

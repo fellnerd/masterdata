@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { listEntities, createEntity } from '@/lib/services/entityService'
+import { requireAccess, getVisibility, modelAllowed, entityAllowed } from '@/lib/permissions'
 
 // Force Node.js runtime (not Edge)
 export const runtime = 'nodejs';
@@ -9,6 +10,9 @@ export const dynamic = 'force-dynamic';
 // GET /api/entities - List all entities
 export async function GET(request: NextRequest) {
   logger.info('GET /api/entities')
+
+  const scope = await getVisibility('read')
+  if (!scope.ok) return scope.response
 
   try {
     const { searchParams } = new URL(request.url)
@@ -19,7 +23,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: result.error }, { status: result.status })
     }
 
-    return NextResponse.json({ data: result.data, total: result.data.length })
+    const data = result.data.filter(e => entityAllowed(scope.visibility, e.id))
+    return NextResponse.json({ data, total: data.length })
   } catch (error) {
     logger.error({ error }, 'Failed to fetch entities')
     return NextResponse.json(
@@ -35,6 +40,11 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
+
+    // a new entity needs the schema permission on its model
+    const denied = await requireAccess('schema', { modelId: Number(body?.model_id) })
+    if (denied) return denied
+
     const result = await createEntity(body)
 
     if (!result.ok) {

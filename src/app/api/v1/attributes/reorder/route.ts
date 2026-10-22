@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
-import { requireAdminForToken } from '@/lib/authz'
+import { requireTokenAccess, getTokenVisibility, entityAllowed, modelAllowed, entityIdOfAttribute } from '@/lib/permissions'
 import { reorderAttributes } from '@/lib/services/attributeService'
 
 export const runtime = 'nodejs'
@@ -15,14 +15,14 @@ export async function PUT(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
-  const adminError = await requireAdminForToken(auth.userId)
-  if (adminError) return adminError
-
   try {
     const { entity_id, order } = await request.json()
     if (!Number.isInteger(entity_id)) {
       return NextResponse.json({ error: 'entity_id (integer) is required' }, { status: 400 })
     }
+
+    const schemaDenied = await requireTokenAccess(auth.userId, 'schema', { entityId: entity_id })
+    if (schemaDenied) return schemaDenied
 
     const result = await reorderAttributes(entity_id, order, `token:${auth.userId}`)
     if (!result.ok) {

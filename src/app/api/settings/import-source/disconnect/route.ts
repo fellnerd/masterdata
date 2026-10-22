@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import { requireAccess } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -12,6 +13,10 @@ const TEMP_DIR = path.join(os.tmpdir(), 'mds-dbt-source')
 
 // POST /api/settings/import-source/disconnect - Remove cloned repo
 export async function POST() {
+  // import source settings hold credentials: global admin only
+  const denied = await requireAccess('system')
+  if (denied) return denied
+
   logger.info('POST /api/settings/import-source/disconnect')
   
   try {

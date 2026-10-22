@@ -232,3 +232,81 @@ export async function getTokenVisibility(
   if (!(await principalHasAccess(p))) return { ok: false, response: forbidden('No access: the token owner has no permission in this system', 'no_access') }
   return { ok: true, visibility: await principalVisibility(p, action) }
 }
+
+// ---- id lookups for routes that only get a child id -----------------------------
+
+export async function entityIdOfAttribute(attributeId: number): Promise<number | null> {
+  const rows = await dbQuery<{ entity_id: number }>('SELECT entity_id FROM mds_meta.attribute WHERE id = @id', { id: attributeId })
+  return rows[0]?.entity_id ?? null
+}
+
+export async function entityIdOfRecord(recordId: number): Promise<number | null> {
+  const rows = await dbQuery<{ entity_id: number }>('SELECT entity_id FROM mds_stage.staged_record WHERE id = @id', { id: recordId })
+  return rows[0]?.entity_id ?? null
+}
+
+export async function entityIdOfView(viewId: number): Promise<number | null> {
+  const rows = await dbQuery<{ entity_id: number }>('SELECT entity_id FROM mds_meta.entity_view WHERE id = @id', { id: viewId })
+  return rows[0]?.entity_id ?? null
+}
+
+// The (distinct) entities a commit touches, via its staged records.
+export async function entityIdsOfCommit(commitId: number): Promise<number[]> {
+  const rows = await dbQuery<{ entity_id: number }>(
+    'SELECT DISTINCT entity_id FROM mds_stage.staged_record WHERE commit_id = @id',
+    { id: commitId }
+  )
+  return rows.map(r => r.entity_id)
+}
+
+// Requires `action` on EVERY listed entity (e.g. approving a commit that spans entities).
+export async function requireAccessOnAll(action: Action, entityIds: number[]): Promise<NextResponse | null> {
+  if (entityIds.length === 0) return requireAccess(action)
+  for (const entityId of entityIds) {
+    const denied = await requireAccess(action, { entityId })
+    if (denied) return denied
+  }
+  return null
+}
+
+export async function entityIdOfCommit(commitId: number): Promise<number | null> {
+  const rows = await dbQuery<{ entity_id: number }>('SELECT entity_id FROM mds_stage.[commit] WHERE id = @id', { id: commitId })
+  return rows[0]?.entity_id ?? null
+}
+
+// Own data or system admin: used where a user may manage their own record (API
+// tokens, own profile) but only a global admin may touch anyone else's.
+export async function requireSelfOrSystem(targetUserId: number): Promise<NextResponse | null> {
+  const p = await principalFromSession()
+  if (!p) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (p.userId === targetUserId) return null
+  return requireAccess('system')
+}
+
+export async function requireSelfEmailOrSystem(email: string | null): Promise<NextResponse | null> {
+  const p = await principalFromSession()
+  if (!p) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (email && p.email.toLowerCase() === email.toLowerCase()) return null
+  return requireAccess('system')
+}
+
+// A single job (details / live stream): visible to users who may read the entities
+// it is about; a job that is not tied to entities is system-level.
+export async function requireJobAccess(data: { entityId?: number; entityIds?: number[] } | undefined): Promise<NextResponse | null> {
+  const ids = [...(data?.entityIds ?? []), ...(data?.entityId != null ? [data.entityId] : [])].filter(Number.isInteger)
+  return ids.length > 0 ? requireAccessOnAll('read', ids) : requireAccess('system')
+}
+
+// Grants with the model/entity names resolved, for display ("editor on ASCEM").
+export async function lookupGrantTargets(grants: Grant[]) {
+  const models = await dbQuery<{ id: number; code: string }>('SELECT id, code FROM mds_meta.model')
+  const entities = await dbQuery<{ id: number; code: string; name: string }>('SELECT id, code, name FROM mds_meta.entity')
+  return grants.map(g => ({
+    role: g.role,
+    scope: g.scope,
+    target:
+      g.scope === 'global' ? null
+        : g.scope === 'model' ? models.find(m => m.id === g.modelId)?.code ?? `model ${g.modelId}`
+          : entities.find(e => e.id === g.entityId)?.name ?? `entity ${g.entityId}`,
+  }))
+}

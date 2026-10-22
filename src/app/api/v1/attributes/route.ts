@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { verifyApiToken } from '@/lib/apiToken'
-import { requireAdminForToken } from '@/lib/authz'
+import { requireTokenAccess, getTokenVisibility, entityAllowed, modelAllowed, entityIdOfAttribute } from '@/lib/permissions'
 import { listAttributes, createAttribute } from '@/lib/services/attributeService'
 
 export const runtime = 'nodejs'
@@ -24,6 +24,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'entity_id query parameter is required' }, { status: 400 })
   }
 
+  const readDenied = await requireTokenAccess(auth.userId, 'read', { entityId: parseInt(entityId) })
+  if (readDenied) return readDenied
+
   try {
     const result = await listAttributes(parseInt(entityId))
     if (!result.ok) {
@@ -42,11 +45,10 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
-  const adminError = await requireAdminForToken(auth.userId)
-  if (adminError) return adminError
-
   try {
     const body = await request.json()
+    const schemaDenied = await requireTokenAccess(auth.userId, 'schema', { entityId: Number(body?.entity_id) })
+    if (schemaDenied) return schemaDenied
     const result = await createAttribute({ ...body, created_by: `token:${auth.userId}` })
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status })
