@@ -207,6 +207,31 @@ async function handleGithubAction(job: Job<MdsJobData>): Promise<void> {
   throw new Error(`Timeout beim Warten auf Workflow-Abschluss: ${runUrl}`);
 }
 
+// Runs generate_models.py for the given entity codes (looked up to ids first).
+async function regenerateModelsForEntities(job: Job<MdsJobData>, entityCodes: string[]): Promise<void> {
+  const pool = await getDbPool();
+  const request = pool.request();
+  const placeholders = entityCodes.map((code, i) => {
+    request.input(`code${i}`, sql.NVarChar, code.toLowerCase());
+    return `@code${i}`;
+  }).join(', ');
+  const result = await request.query(`SELECT id FROM mds_meta.entity WHERE LOWER(code) IN (${placeholders})`);
+  const ids: number[] = result.recordset.map((r: { id: number }) => r.id);
+  if (ids.length === 0) {
+    throw new Error(`No entity found for: ${entityCodes.join(', ')}`);
+  }
+
+  const gen = await runCommandWithStreaming(
+    process.env.PYTHON_CMD || 'python3',
+    [process.env.GENERATE_MODELS_PATH || '/app/dbt/scripts/generate_models.py', '--entity-ids', ids.join(',')],
+    job,
+    []
+  );
+  if (gen.exitCode !== 0) {
+    throw new Error(`generate_models.py failed with exit code ${gen.exitCode}\n${gen.stderr}`);
+  }
+}
+
 /**
  * Deploy Handler - Deploys committed data via dbt
  * 
@@ -239,6 +264,13 @@ async function handleDeploy(job: Job<MdsJobData>): Promise<void> {
     `Commits: ${commitIds?.join(', ') || 'all approved'}`
   ]);
   
+  // Step 0: (re)generate the dbt models of the entities being deployed. They only
+  // exist as generated files inside this container (not in git, not on a volume), so
+  // after every container rebuild they are gone until "Deploy Schema" ran again -
+  // a data deploy must not depend on that. Generating them is cheap and idempotent.
+  await updateProgress(job, 5, 'Preparing dbt models...', ['🔧 Regenerating the models of the deployed entities...']);
+  await regenerateModelsForEntities(job, entityCodes);
+
   // Step 1: Run dbt load models (staged_record → mds_load)
   await updateProgress(job, 10, 'Loading data to mds_load tables...', []);
   
