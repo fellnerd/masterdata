@@ -15,6 +15,8 @@ export async function GET() {
     const grants = await loadGrants(p)
     return NextResponse.json({
       email: p.email,
+      // how many Entra groups this sign-in carries (0 = signed in before groups were enabled -> sign in again)
+      tokenGroups: p.groupIds.length,
       hasAccess: hasAnyAccess(grants),
       capabilities: {
         write: grants.some(g => roleAllows(g.role, 'write')),

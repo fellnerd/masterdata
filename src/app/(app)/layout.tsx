@@ -21,6 +21,29 @@ function AccessGate({ children }: { children: React.ReactNode }) {
     );
   }
 
+  // The check itself failed: say so instead of claiming the user has no permission.
+  if (access.failed) {
+    return (
+      <div style={{ marginTop: 80 }}>
+        <NonIdealState
+          icon="warning-sign"
+          title={access.failed === 'unauthorized' ? 'Sitzung ungültig' : 'Berechtigungen konnten nicht geprüft werden'}
+          description={
+            access.failed === 'unauthorized'
+              ? 'Deine Anmeldung ist nicht mehr gültig. Bitte melde dich ab und neu an.'
+              : 'Der Server hat die Prüfung gerade nicht beantwortet. Das ist kein Zeichen für fehlende Rechte - bitte neu laden.'
+          }
+          action={
+            <>
+              <Button icon="refresh" onClick={() => window.location.reload()} style={{ marginRight: 8 }}>Neu laden</Button>
+              <Button icon="log-out" onClick={() => signOut({ callbackUrl: '/login' })}>Abmelden</Button>
+            </>
+          }
+        />
+      </div>
+    );
+  }
+
   // Signed in with Microsoft, but no permission anywhere: nothing to show.
   if (!access.hasAccess) {
     return (
@@ -37,6 +60,10 @@ function AccessGate({ children }: { children: React.ReactNode }) {
             <p>
               Der Zugriff wird über Entra-Sicherheitsgruppen vergeben. Bitte einen Administrator, dich in die
               passende Gruppe (z. B. <code>sg-mds-…</code>) aufzunehmen, und melde dich danach neu an.
+            </p>
+            <p className="text-muted" style={{ fontSize: 12 }}>
+              Diese Anmeldung enthält {access.tokenGroups ?? 0} Entra-Gruppe(n)
+              {(access.tokenGroups ?? 0) === 0 ? ' - falls du gerade in eine Gruppe aufgenommen wurdest, melde dich ab und wieder an.' : '.'}
             </p>
           </>
         }
